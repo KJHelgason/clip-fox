@@ -1,22 +1,28 @@
 'use client';
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import AuthForm from "@/components/AuthForm";
+import LoggedInUI from "@/components/LoggedInUI";
 
 export default function Home() {
-  useEffect(() => {
-    async function testSupabase() {
-      const { data, error } = await supabase.from("test").select("*");
-      console.log("data:", data);
-      console.log("error:", error);
-    }
+  const [sessionChecked, setSessionChecked] = useState(false);
+  const [loggedIn, setLoggedIn] = useState(false);
 
-    testSupabase();
+  useEffect(() => {
+    const checkSession = async () => {
+      const { data } = await supabase.auth.getSession();
+      setLoggedIn(!!data.session);
+      setSessionChecked(true);
+    };
+    checkSession();
   }, []);
+
+  if (!sessionChecked) return <div>Loading...</div>;
 
   return (
     <main className="flex h-screen items-center justify-center">
-      <h1 className="text-4xl font-bold">🦊 Supabase connected</h1>
+      {loggedIn ? <LoggedInUI /> : <AuthForm />}
     </main>
   );
 }

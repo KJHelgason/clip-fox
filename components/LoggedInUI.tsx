@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import Link from "next/link";
 
 export default function LoggedInUI() {
   const [profile, setProfile] = useState<any>(null);
@@ -42,6 +43,9 @@ export default function LoggedInUI() {
     )}
     <h2 className="text-xl font-bold">{profile.username || profile.email}</h2>
     <p className="text-sm text-gray-600">Logged in via {profile.provider}</p>
+    <Link href="/dashboard">
+        <button className="bg-blue-600 text-white px-4 py-2 rounded">Dashboard</button>
+      </Link>
     <button onClick={handleLogout} className="bg-red-500 text-white px-4 py-2 rounded">
       Log Out
     </button>

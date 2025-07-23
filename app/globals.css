@@ -119,3 +119,25 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Select any span that contains a thumb */
+[role="slider"] {
+  z-index: 50; /* already set on the thumb, you want the parent span */
+}
+[role="slider"]::parent {
+  z-index: 10;
+}
+
+/* Any span directly under the slider root, with a child that is a thumb */
+.radix-slider span[style*="position: absolute"] {
+  z-index: 10 !important;
+}
+
+/* Thumb wrapper spans that contain the actual thumb element */
+.my-slider-root > span:not([role="slider"]) {
+  z-index: 10 !important;
+}
+
+.my-slider-root > span[style*="position: absolute"] {
+  z-index: 10 !important;
+}

@@ -1,7 +1,9 @@
 import { supabase } from "@/lib/supabase";
 
 export default function AuthForm() {
-    async function handleOAuth(provider: 'google') {
+    type Provider = 'google' | 'discord' | 'twitch'; // extend this as needed
+
+    async function handleOAuth(provider: Provider) {
         const { error } = await supabase.auth.signInWithOAuth({ provider });
         if (error) console.error(error.message);
     }

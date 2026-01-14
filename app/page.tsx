@@ -28,10 +28,14 @@ export default function Home() {
     };
   }, []);
 
-  if (!sessionChecked) return <div>Loading...</div>;
+  if (!sessionChecked) return (
+    <main className="flex h-screen items-center justify-center bg-zinc-950">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"></div>
+    </main>
+  );
 
   return (
-    <main className="flex h-screen items-center justify-center">
+    <main className="flex h-screen items-center justify-center bg-zinc-950">
       {loggedIn ? <LoggedInUI /> : <AuthForm />}
     </main>
 

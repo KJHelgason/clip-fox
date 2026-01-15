@@ -1,32 +1,68 @@
 'use client'
 
-import React, { useEffect, useState, useRef, useCallback } from 'react'
+import React, { useEffect, useState, useRef, useCallback, Suspense } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import { supabase } from '@/lib/supabase'
-import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import TrimSlider from '@/components/TrimSlider'
+import { useClip, parseEditData, type Clip } from '@/lib/hooks/useClip'
+import Timeline from '@/components/editor/Timeline'
 import LayoutTemplates from '@/components/editor/LayoutTemplates'
-import OverlayProperties from '@/components/editor/OverlayProperties'
-import AspectRatioPreview from '@/components/editor/AspectRatioPreview'
-import ElementsPanel from '@/components/editor/ElementsPanel'
-import ZoomEffects from '@/components/editor/ZoomEffects'
-import CaptionEditor from '@/components/editor/CaptionEditor'
-import ExportPanel from '@/components/editor/ExportPanel'
 import { usePreviewCropDrag, CropRegion } from '@/lib/hooks/usePreviewCropDrag'
 import { PreviewCropRegion } from '@/components/editor/PreviewCropRegion'
 import { CropToolbar } from '@/components/editor/CropToolbar'
+
+// Dynamic imports for heavy editor panels - only loaded when their tab is active
+// This reduces initial bundle size and improves Time to Interactive
+const ElementsPanel = dynamic(() => import('@/components/editor/ElementsPanel'), {
+  loading: () => <PanelSkeleton />,
+  ssr: false,
+})
+
+const ZoomEffects = dynamic(() => import('@/components/editor/ZoomEffects'), {
+  loading: () => <PanelSkeleton />,
+  ssr: false,
+})
+
+const AudioPanel = dynamic(() => import('@/components/editor/AudioPanel'), {
+  loading: () => <PanelSkeleton />,
+  ssr: false,
+})
+
+const CaptionEditor = dynamic(() => import('@/components/editor/CaptionEditor'), {
+  loading: () => <PanelSkeleton />,
+  ssr: false,
+})
+
+const ExportPanel = dynamic(() => import('@/components/editor/ExportPanel'), {
+  loading: () => <PanelSkeleton />,
+  ssr: false,
+})
+
+const OverlayProperties = dynamic(() => import('@/components/editor/OverlayProperties'), {
+  ssr: false,
+})
+
+// Loading skeleton for panels
+function PanelSkeleton() {
+  return (
+    <div className="p-4 space-y-4 animate-pulse">
+      <div className="h-8 bg-gray-800 rounded w-3/4" />
+      <div className="h-32 bg-gray-800 rounded" />
+      <div className="h-8 bg-gray-800 rounded w-1/2" />
+      <div className="h-24 bg-gray-800 rounded" />
+    </div>
+  )
+}
 import {
   OverlayElement,
   AspectRatio,
-  ASPECT_RATIOS,
   LayoutTemplate,
   ZoomKeyframe,
   CaptionStyle,
   findAvailableRow,
   timeToPosition,
-  durationToWidth,
-  formatTime
+  durationToWidth
 } from '@/lib/types'
 import {
   Layout,
@@ -40,28 +76,11 @@ import {
   ZoomIn,
   Camera,
   MoreVertical,
-  ChevronLeft,
-  Play,
-  Pause,
-  SkipBack,
-  SkipForward,
-  Volume2,
-  VolumeX,
-  Scissors,
-  Maximize2,
-  Youtube,
   Save,
-  Plus,
-  Trash2,
-  Upload
+  Trash2
 } from 'lucide-react'
 
-type Clip = {
-  id: string
-  title: string | null
-  video_path: string
-  signedUrl: string | null
-}
+// Clip type imported from useClip hook
 
 type SidebarTab = 'layouts' | 'elements' | 'effects' | 'audio' | 'captions' | 'export'
 type PreviewPlatform = 'youtube' | 'tiktok'
@@ -89,11 +108,11 @@ export default function EditClipPage() {
   const { id } = useParams()
   const router = useRouter()
 
-  // Clip data
-  const [clip, setClip] = useState<Clip | null>(null)
+  // Clip data - using SWR for optimized fetching with caching
+  const { clip, isLoading: loading, mutate: mutateClip } = useClip(id)
   const [newTitle, setNewTitle] = useState('')
-  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [editDataLoaded, setEditDataLoaded] = useState(false)
 
   // Video state
   const [startTime, setStartTime] = useState(0)
@@ -115,7 +134,6 @@ export default function EditClipPage() {
   const [overlays, setOverlays] = useState<OverlayElement[]>([])
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null)
   const videoContainerRef = useRef<HTMLDivElement>(null)
-  const overlayBarRef = useRef<HTMLDivElement>(null)
 
   // Overlay dragging
   const [dragOverlayId, setDragOverlayId] = useState<string | null>(null)
@@ -132,8 +150,6 @@ export default function EditClipPage() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [previewPlatform, setPreviewPlatform] = useState<PreviewPlatform>('youtube')
   const [previewFit, setPreviewFit] = useState(100)
-  const [showVolume, setShowVolume] = useState(false)
-  const volumeButtonTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Editor scale for responsive sizing
   const [editorScale, setEditorScale] = useState(1)
@@ -170,6 +186,7 @@ export default function EditClipPage() {
   const [cropDragStartRegion, setCropDragStartRegion] = useState<CropRegion | null>(null)
   const mainVideoContainerRef = useRef<HTMLDivElement>(null)
   const previewContainerRef = useRef<HTMLDivElement>(null)
+  const previewBgVideoRef = useRef<HTMLVideoElement>(null)
 
   // Preview crop drag hook - handles all preview panel drag operations
   const {
@@ -184,54 +201,94 @@ export default function EditClipPage() {
     onSelect: setSelectedCropId,
   })
 
-  // Undo/Redo history
-  const [history, setHistory] = useState<OverlayElement[][]>([[]])
-  const [historyIndex, setHistoryIndex] = useState(0)
-
-  // Fetch clip data
-  useEffect(() => {
-    const fetchClip = async () => {
-      const { data, error } = await supabase
-        .from('clips')
-        .select('*')
-        .eq('id', id)
-        .single()
-
-      if (error || !data) {
-        console.error('Clip not found:', error)
-        setLoading(false)
-        return
-      }
-
-      const { data: signed } = await supabase.storage
-        .from('clips')
-        .createSignedUrl(data.video_path, 3600)
-
-      setClip({
-        ...data,
-        signedUrl: signed?.signedUrl || null
-      })
-      setNewTitle(data.title || '')
-
-      // Load saved edit state if exists
-      if (data.edit_data) {
-        try {
-          const editState = JSON.parse(data.edit_data)
-          if (editState.aspectRatio) setAspectRatio(editState.aspectRatio)
-          if (editState.cropPosition) setCropPosition(editState.cropPosition)
-          if (editState.overlays) setOverlays(editState.overlays)
-          if (editState.zoomKeyframes) setZoomKeyframes(editState.zoomKeyframes)
-          if (editState.thumbs) setThumbs(editState.thumbs)
-        } catch (e) {
-          console.error('Failed to parse edit data:', e)
-        }
-      }
-
-      setLoading(false)
+  // Undo/Redo history - stores complete editor state snapshots
+  type EditorSnapshot = {
+    cropRegions: CropRegion[]
+    overlays: OverlayElement[]
+    selectedLayoutId: string | undefined
+  }
+  const [undoStack, setUndoStack] = useState<EditorSnapshot[]>([])
+  const [redoStack, setRedoStack] = useState<EditorSnapshot[]>([])
+  
+  // Save current state to undo stack
+  const pushToUndoStack = useCallback(() => {
+    const snapshot: EditorSnapshot = {
+      cropRegions: JSON.parse(JSON.stringify(cropRegions)),
+      overlays: JSON.parse(JSON.stringify(overlays)),
+      selectedLayoutId: selectedLayout?.id,
     }
+    setUndoStack(prev => [...prev.slice(-50), snapshot]) // Keep last 50 states
+    setRedoStack([]) // Clear redo stack on new action
+  }, [cropRegions, overlays, selectedLayout])
+  
+  // Undo action
+  const handleUndo = useCallback(() => {
+    if (undoStack.length === 0) return
+    
+    // Save current state to redo stack
+    const currentSnapshot: EditorSnapshot = {
+      cropRegions: JSON.parse(JSON.stringify(cropRegions)),
+      overlays: JSON.parse(JSON.stringify(overlays)),
+      selectedLayoutId: selectedLayout?.id,
+    }
+    setRedoStack(prev => [...prev, currentSnapshot])
+    
+    // Restore previous state
+    const prevState = undoStack[undoStack.length - 1]
+    setCropRegions(prevState.cropRegions)
+    setOverlays(prevState.overlays)
+    if (prevState.selectedLayoutId) {
+      setSelectedLayout({ id: prevState.selectedLayoutId, name: prevState.selectedLayoutId } as LayoutTemplate)
+    }
+    
+    setUndoStack(prev => prev.slice(0, -1))
+  }, [undoStack, cropRegions, overlays, selectedLayout])
+  
+  // Redo action
+  const handleRedo = useCallback(() => {
+    if (redoStack.length === 0) return
+    
+    // Save current state to undo stack
+    const currentSnapshot: EditorSnapshot = {
+      cropRegions: JSON.parse(JSON.stringify(cropRegions)),
+      overlays: JSON.parse(JSON.stringify(overlays)),
+      selectedLayoutId: selectedLayout?.id,
+    }
+    setUndoStack(prev => [...prev, currentSnapshot])
+    
+    // Restore next state
+    const nextState = redoStack[redoStack.length - 1]
+    setCropRegions(nextState.cropRegions)
+    setOverlays(nextState.overlays)
+    if (nextState.selectedLayoutId) {
+      setSelectedLayout({ id: nextState.selectedLayoutId, name: nextState.selectedLayoutId } as LayoutTemplate)
+    }
+    
+    setRedoStack(prev => prev.slice(0, -1))
+  }, [redoStack, cropRegions, overlays, selectedLayout])
+  
+  // Check if undo/redo is available
+  const canUndo = undoStack.length > 0
+  const canRedo = redoStack.length > 0
 
-    fetchClip()
-  }, [id])
+  // Load saved edit state when clip is available
+  useEffect(() => {
+    if (!clip || editDataLoaded) return
+    
+    setNewTitle(clip.title || '')
+    
+    // Load saved edit state if exists
+    const editState = parseEditData(clip.edit_data)
+    if (editState) {
+      if (editState.aspectRatio) setAspectRatio(editState.aspectRatio as AspectRatio)
+      if (editState.cropPosition) setCropPosition(editState.cropPosition)
+      if (editState.overlays) setOverlays(editState.overlays as OverlayElement[])
+      if (editState.zoomKeyframes) setZoomKeyframes(editState.zoomKeyframes as ZoomKeyframe[])
+      if (editState.thumbs) setThumbs(editState.thumbs)
+    }
+    
+    setEditDataLoaded(true)
+  }, [clip, editDataLoaded])
 
   // Sync video volume
   useEffect(() => {
@@ -271,27 +328,81 @@ export default function EditClipPage() {
       videoRef.removeEventListener('pause', sync)
     }
   }, [videoRef])
+  
+  // Sync preview background video with main video
+  useEffect(() => {
+    if (!videoRef || !previewBgVideoRef.current) return
+    
+    const bgVideo = previewBgVideoRef.current
+    
+    const syncTime = () => {
+      if (Math.abs(bgVideo.currentTime - videoRef.currentTime) > 0.5) {
+        bgVideo.currentTime = videoRef.currentTime
+      }
+    }
+    
+    const syncPlay = () => {
+      bgVideo.play().catch(() => {})
+    }
+    
+    const syncPause = () => {
+      bgVideo.pause()
+    }
+    
+    const syncSeek = () => {
+      bgVideo.currentTime = videoRef.currentTime
+    }
+    
+    videoRef.addEventListener('play', syncPlay)
+    videoRef.addEventListener('pause', syncPause)
+    videoRef.addEventListener('seeked', syncSeek)
+    videoRef.addEventListener('timeupdate', syncTime)
+    
+    // Initial sync
+    bgVideo.currentTime = videoRef.currentTime
+    if (!videoRef.paused) {
+      bgVideo.play().catch(() => {})
+    }
+    
+    return () => {
+      videoRef.removeEventListener('play', syncPlay)
+      videoRef.removeEventListener('pause', syncPause)
+      videoRef.removeEventListener('seeked', syncSeek)
+      videoRef.removeEventListener('timeupdate', syncTime)
+    }
+  }, [videoRef])
 
   // Calculate editor scale based on viewport size
+  // editorScale determines the height of the video panels (height = scale * 360px)
   useEffect(() => {
     const calculateScale = () => {
       if (!editorContainerRef.current) return
-      
-      // Fixed dimensions: 640px (main video) + 225px (preview) + 32px (gap) = 897px width
-      // Height: 360px + headers/controls ~80px = 440px
-      const baseWidth = 900
-      const baseHeight = 440
       
       const container = editorContainerRef.current
       const availableWidth = container.clientWidth
       const availableHeight = container.clientHeight
       
-      // Calculate scale to fit both width and height, with some padding
-      const scaleX = (availableWidth - 80) / baseWidth
-      const scaleY = (availableHeight - 80) / baseHeight
-      const scale = Math.min(1.5, scaleX, scaleY) // Max scale 1.5x
+      // At scale 1.0:
+      // - Source video: 640x360 (16:9)
+      // - Preview: 202.5x360 (9:16)
+      // - Gap: 32px
+      // - Headers/controls: ~60px height
+      // Total width = 640 + 202.5 + 32 = 874.5px
+      // Total height = 360 + 60 = 420px
       
-      setEditorScale(Math.max(0.3, scale)) // Min scale 0.3
+      const baseSourceWidth = 640
+      const basePreviewWidth = 202.5
+      const baseGap = 32
+      const baseHeight = 360
+      const headerHeight = 60
+      
+      // Calculate max scale that fits both width and height
+      const maxScaleForWidth = (availableWidth - 64) / (baseSourceWidth + basePreviewWidth + baseGap)
+      const maxScaleForHeight = (availableHeight - headerHeight - 32) / baseHeight
+      
+      const scale = Math.min(1.4, maxScaleForWidth, maxScaleForHeight) // Max scale 1.4x
+      
+      setEditorScale(Math.max(0.4, scale)) // Min scale 0.4
     }
     
     // Initial calculation with delay to ensure container is rendered
@@ -310,16 +421,32 @@ export default function EditClipPage() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return
 
+      // Undo: Ctrl+Z
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        handleUndo()
+        return
+      }
+      
+      // Redo: Ctrl+Y or Ctrl+Shift+Z
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault()
+        handleRedo()
+        return
+      }
+
       if (e.key === ' ') {
         e.preventDefault()
         handlePlayPause()
       }
       if (e.key === 'Delete' && selectedOverlayId) {
+        pushToUndoStack()
         setOverlays(prev => prev.filter(o => o.id !== selectedOverlayId))
         setSelectedOverlayId(null)
       }
       if (e.key === 'Escape') {
         setSelectedOverlayId(null)
+        setSelectedCropId(null)
       }
       // Arrow keys for frame stepping
       if (e.key === 'ArrowLeft' && videoRef) {
@@ -331,7 +458,7 @@ export default function EditClipPage() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedOverlayId, videoRef, duration])
+  }, [selectedOverlayId, videoRef, duration, handleUndo, handleRedo, pushToUndoStack])
 
   // Overlay drag handlers
   const handleOverlayMouseDown = (
@@ -596,21 +723,42 @@ export default function EditClipPage() {
         const cropH = (updated.height / 100) * refVideoH
         const newAspectRatio = cropW / cropH
         
-        // Preview container is 202.5x360 (9:16 ratio)
+        // Preview container uses 9:16 aspect ratio
+        // Use a reference container of 202.5x360 for percentage calculations
         const containerWidth = 202.5
         const containerHeight = 360
+        
+        // First, ensure previewX + previewWidth doesn't exceed 100%
+        if (updated.previewX + updated.previewWidth > 100) {
+          updated.previewWidth = Math.max(15, 100 - updated.previewX)
+        }
         
         // Calculate current preview height with new aspect ratio
         const previewWidthPx = (updated.previewWidth / 100) * containerWidth
         const previewHeightPx = previewWidthPx / newAspectRatio
         const previewHeightPercent = (previewHeightPx / containerHeight) * 100
         
-        // If preview would exceed container, reduce previewWidth to fit
+        // If preview would exceed container bottom, reduce previewWidth to fit
         if (updated.previewY + previewHeightPercent > 100) {
-          const maxHeightPercent = 100 - updated.previewY
+          const maxHeightPercent = Math.max(15, 100 - updated.previewY)
           const maxHeightPx = (maxHeightPercent / 100) * containerHeight
           const maxWidthPx = maxHeightPx * newAspectRatio
           updated.previewWidth = Math.max(15, (maxWidthPx / containerWidth) * 100)
+        }
+        
+        // Also ensure previewWidth doesn't exceed 100%
+        if (updated.previewWidth > 100) {
+          updated.previewWidth = 100
+        }
+        
+        // Ensure previewX doesn't go negative
+        if (updated.previewX < 0) {
+          updated.previewX = 0
+        }
+        
+        // Ensure previewY doesn't go negative
+        if (updated.previewY < 0) {
+          updated.previewY = 0
         }
       }
 
@@ -640,6 +788,7 @@ export default function EditClipPage() {
   }, [dragCropId, cropDragType, cropDragStart, cropDragStartRegion, snappingEnabled])
 
   const handleAddCrop = () => {
+    pushToUndoStack()
     const colors = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899']
     
     // Calculate next available preview position using actual aspect ratios
@@ -690,6 +839,7 @@ export default function EditClipPage() {
   const handleDeleteCrop = (cropId: string) => {
     if (cropRegions.length <= 1) return // Keep at least one crop
     
+    pushToUndoStack()
     const deletedCrop = cropRegions.find(c => c.id === cropId)
     if (!deletedCrop) return
     
@@ -774,12 +924,46 @@ export default function EditClipPage() {
         }
       }
       
-      // Ensure crop stays within bounds after resizing
+      // Ensure crop stays within source video bounds after resizing
       if (updated.x + updated.width > 100) {
         updated.x = 100 - updated.width
       }
       if (updated.y + updated.height > 100) {
         updated.y = 100 - updated.height
+      }
+      
+      // Constrain preview slot to fit within preview container after aspect ratio change
+      const refVideoW = 160
+      const refVideoH = 90
+      const cropW = (updated.width / 100) * refVideoW
+      const cropH = (updated.height / 100) * refVideoH
+      const newAspectRatio = cropW / cropH
+      
+      // Reference preview container dimensions (9:16 aspect)
+      const containerWidth = 202.5
+      const containerHeight = 360
+      
+      // Calculate preview height with new aspect ratio
+      let previewWidthPx = (updated.previewWidth / 100) * containerWidth
+      let previewHeightPx = previewWidthPx / newAspectRatio
+      let previewHeightPercent = (previewHeightPx / containerHeight) * 100
+      
+      // If preview exceeds width bounds, constrain
+      if (updated.previewX + updated.previewWidth > 100) {
+        updated.previewWidth = Math.max(15, 100 - updated.previewX)
+      }
+      
+      // Recalculate height after width adjustment
+      previewWidthPx = (updated.previewWidth / 100) * containerWidth
+      previewHeightPx = previewWidthPx / newAspectRatio
+      previewHeightPercent = (previewHeightPx / containerHeight) * 100
+      
+      // If preview exceeds height bounds, reduce width to fit
+      if (updated.previewY + previewHeightPercent > 100) {
+        const maxHeightPercent = Math.max(15, 100 - updated.previewY)
+        const maxHeightPx = (maxHeightPercent / 100) * containerHeight
+        const maxWidthPx = maxHeightPx * newAspectRatio
+        updated.previewWidth = Math.max(15, (maxWidthPx / containerWidth) * 100)
       }
       
       return updated
@@ -821,6 +1005,7 @@ export default function EditClipPage() {
     const crop = cropRegions.find(c => c.id === cropId)
     if (!crop) return
     
+    pushToUndoStack()
     const colors = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899']
     
     // Z-index is based on current count of crops
@@ -870,7 +1055,7 @@ export default function EditClipPage() {
 
   // Overlay management
   const handleAddOverlay = (overlay: Partial<OverlayElement>) => {
-    const barWidth = overlayBarRef.current?.getBoundingClientRect().width || 600
+    const barWidth = 600 // Default timeline width
     const st = overlay.startTime ?? currentTime
     const et = overlay.endTime ?? Math.min(duration, st + 3)
 
@@ -1110,9 +1295,19 @@ export default function EditClipPage() {
           {activeTab === 'layouts' && (
             <LayoutTemplates
               selectedLayoutId={selectedLayout?.id}
-              onSelectLayout={setSelectedLayout}
+              onSelectLayout={(layout) => {
+                pushToUndoStack()
+                setSelectedLayout(layout)
+              }}
               aspectRatio={aspectRatio}
               onChangeAspectRatio={setAspectRatio}
+              cropRegions={cropRegions}
+              onApplyTemplate={(template) => {
+                pushToUndoStack()
+                if (template.cropRegions && template.cropRegions.length > 0) {
+                  setCropRegions(template.cropRegions)
+                }
+              }}
             />
           )}
           {activeTab === 'elements' && (
@@ -1133,9 +1328,14 @@ export default function EditClipPage() {
             />
           )}
           {activeTab === 'audio' && (
-            <div className="p-4 text-gray-400 text-sm">
-              <p>Audio effects coming soon...</p>
-            </div>
+            <AudioPanel
+              onAddAudioTrack={(track) => {
+                // TODO: Handle audio track addition to timeline
+                console.log('Adding audio track:', track)
+              }}
+              currentTime={currentTime}
+              duration={duration}
+            />
           )}
           {activeTab === 'captions' && (
             <CaptionEditor
@@ -1227,16 +1427,26 @@ export default function EditClipPage() {
             {/* Undo/Redo */}
             <div className="flex items-center gap-1">
               <button
-                onClick={() => {/* TODO: Implement undo */}}
-                className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white transition-colors"
-                title="Undo"
+                onClick={handleUndo}
+                disabled={!canUndo}
+                className={`p-2 rounded-lg transition-colors ${
+                  canUndo 
+                    ? 'hover:bg-gray-800 text-gray-400 hover:text-white' 
+                    : 'text-gray-600 cursor-not-allowed'
+                }`}
+                title="Undo (Ctrl+Z)"
               >
                 <Undo2 className="w-4 h-4" />
               </button>
               <button
-                onClick={() => {/* TODO: Implement redo */}}
-                className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white transition-colors"
-                title="Redo"
+                onClick={handleRedo}
+                disabled={!canRedo}
+                className={`p-2 rounded-lg transition-colors ${
+                  canRedo 
+                    ? 'hover:bg-gray-800 text-gray-400 hover:text-white' 
+                    : 'text-gray-600 cursor-not-allowed'
+                }`}
+                title="Redo (Ctrl+Y)"
               >
                 <Redo2 className="w-4 h-4" />
               </button>
@@ -1261,28 +1471,16 @@ export default function EditClipPage() {
           ref={editorContainerRef}
           className="flex-1 flex items-center justify-center p-4 md:p-6 overflow-hidden bg-[#0a0a14]"
         >
-          <div 
-            className="flex items-start justify-center"
-            style={{
-              transform: `scale(${editorScale})`,
-              transformOrigin: 'center center',
-              gap: `${32 / editorScale}px`, // Counter-scale the gap to keep it visually constant
-            }}
-          >
+          <div className="flex items-start gap-8">
             {/* Main Video with Crop Regions */}
             <div className="flex flex-col gap-2">
-              {/* Title header - counter-scaled to stay normal size */}
+              {/* Title header */}
               <div 
-                className="flex items-center justify-between select-none"
-                style={{
-                  transform: `scale(${1 / editorScale})`,
-                  transformOrigin: 'left top',
-                  marginBottom: `${8 * (1 / editorScale - 1)}px`,
-                  width: `${640 * editorScale}px`,
-                }}
+                className="flex items-center justify-between select-none shrink-0"
+                style={{ width: `${editorScale * 640}px` }}
               >
                 <span className="text-sm font-medium text-gray-400 select-none">
-                  {selectedLayout ? selectedLayout.name : 'Source Video'}
+                  {selectedLayout ? selectedLayout.name : 'Source'}
                 </span>
                 <div className="flex items-center gap-1">
                   <button className="p-1 hover:bg-gray-800 rounded text-gray-400 hover:text-white">
@@ -1294,13 +1492,13 @@ export default function EditClipPage() {
                 </div>
               </div>
               
-              {/* Main Video Container - Fixed size, scaled by parent */}
+              {/* Main Video Container - 16:9 aspect ratio, height = editorScale * 360px */}
               <div
                 ref={mainVideoContainerRef}
                 className="relative bg-black rounded-lg overflow-visible shadow-2xl"
                 style={{ 
-                  width: '640px',
-                  height: '360px',
+                  width: `${editorScale * 640}px`,
+                  height: `${editorScale * 360}px`,
                 }}
                 onClick={() => { setSelectedOverlayId(null); setSelectedCropId(null) }}
               >
@@ -1346,6 +1544,40 @@ export default function EditClipPage() {
                       transformOrigin: `${currentZoom.x}% ${currentZoom.y}%`
                     }}
                   />
+                  
+                  {/* Dark overlay showing areas outside crop regions */}
+                  {activeTab === 'layouts' && cropRegions.length > 0 && (
+                    <svg 
+                      className="absolute inset-0 w-full h-full pointer-events-none z-[25]"
+                      preserveAspectRatio="none"
+                    >
+                      <defs>
+                        <mask id="cropMask">
+                          {/* White = visible (dark), Black = hidden (clear) */}
+                          <rect x="0" y="0" width="100%" height="100%" fill="white" />
+                          {cropRegions.map((crop) => (
+                            <rect
+                              key={crop.id}
+                              x={`${crop.x}%`}
+                              y={`${crop.y}%`}
+                              width={`${crop.width}%`}
+                              height={`${crop.height}%`}
+                              fill="black"
+                              rx={crop.cornerRounding ? `${crop.cornerRounding}%` : '0'}
+                            />
+                          ))}
+                        </mask>
+                      </defs>
+                      <rect 
+                        x="0" 
+                        y="0" 
+                        width="100%" 
+                        height="100%" 
+                        fill="rgba(0, 0, 0, 0.5)" 
+                        mask="url(#cropMask)"
+                      />
+                    </svg>
+                  )}
 
                 {/* Crop Regions Overlay */}
                 {activeTab === 'layouts' && cropRegions.map((crop) => {
@@ -1408,14 +1640,14 @@ export default function EditClipPage() {
                         )}
                       </div>
                       
-                      {/* Toolbar below selected crop - counter-scaled to stay constant size */}
+                      {/* Toolbar below selected crop */}
                       {isSelected && (
                         <div
                           className="absolute"
                           style={{
                             left: `${crop.x + crop.width / 2}%`,
                             top: `${crop.y + crop.height}%`,
-                            transform: `translate(-50%, 8px) scale(${1 / editorScale})`,
+                            transform: 'translate(-50%, 8px)',
                             transformOrigin: 'top center',
                             zIndex: 150,
                           }}
@@ -1508,16 +1740,11 @@ export default function EditClipPage() {
                 </div>
               </div>
 
-              {/* Crop Controls - Below Video - counter-scaled to stay normal size */}
+              {/* Crop Controls - Below Video */}
               {activeTab === 'layouts' && (
                 <div 
-                  className="flex items-center gap-4"
-                  style={{
-                    transform: `scale(${1 / editorScale})`,
-                    transformOrigin: 'left top',
-                    marginTop: `${8 * (1 / editorScale - 1)}px`,
-                    width: `${640 * editorScale}px`,
-                  }}
+                  className="flex items-center gap-4 shrink-0"
+                  style={{ width: `${editorScale * 640}px` }}
                 >
                   <button
                     onClick={handleAddCrop}
@@ -1544,15 +1771,10 @@ export default function EditClipPage() {
 
             {/* Preview Panel - Right side of video */}
             <div className="flex flex-col gap-2">
-              {/* Preview header - counter-scaled to stay normal size */}
+              {/* Preview header */}
               <div 
-                className="flex items-center justify-between select-none"
-                style={{
-                  transform: `scale(${1 / editorScale})`,
-                  transformOrigin: 'left top',
-                  marginBottom: `${8 * (1 / editorScale - 1)}px`,
-                  width: `${202.5 * editorScale}px`,
-                }}
+                className="flex items-center justify-between select-none shrink-0"
+                style={{ width: `${editorScale * 202.5}px` }}
               >
                 <span className="text-sm font-medium text-gray-400 select-none">Preview</span>
                 <div className="flex items-center gap-1">
@@ -1568,15 +1790,26 @@ export default function EditClipPage() {
                 </div>
               </div>
 
-              {/* Platform Preview - 9:16 aspect ratio - Fixed size, scaled by parent */}
+              {/* Platform Preview - 9:16 aspect ratio, same height as source video */}
               <div 
                 ref={previewContainerRef}
-                className="relative bg-black border border-gray-700"
+                className="relative bg-black border border-gray-700 overflow-hidden"
                 style={{ 
-                  width: '202.5px',
-                  height: '360px',
+                  width: `${editorScale * 202.5}px`,
+                  height: `${editorScale * 360}px`,
                 }}
               >
+                {/* Blurred video background */}
+                {clip?.signedUrl && (
+                  <video
+                    ref={previewBgVideoRef}
+                    src={clip.signedUrl}
+                    className="absolute inset-0 w-full h-full object-cover blur-lg scale-110 opacity-50"
+                    muted
+                    playsInline
+                  />
+                )}
+                
                 {/* Edge indicators for preview slot touching edges - only when dragging in preview */}
                 {selectedCropId && isPreviewDragging && (() => {
                   const crop = cropRegions.find(c => c.id === selectedCropId)
@@ -1644,11 +1877,10 @@ export default function EditClipPage() {
                 {/* Preview showing cropped content */}
                 <div className="w-full h-full relative">
                   {cropRegions.map((crop) => {
-                    // Use fixed container dimensions (not scaled) for calculations
-                    // The scale transform is applied to the parent, but crop percentages
-                    // should be calculated based on the original 202.5x360 container
-                    const containerWidth = 202.5
-                    const containerHeight = 360
+                    // Container dimensions are based on editorScale
+                    // Preview is 9:16 aspect, so width = 202.5 * scale, height = 360 * scale
+                    const containerWidth = editorScale * 202.5
+                    const containerHeight = editorScale * 360
                     
                     return (
                       <PreviewCropRegion
@@ -1708,150 +1940,71 @@ export default function EditClipPage() {
                 </div>
               </div>
 
-              {/* Platform Selector - counter-scaled to stay normal size */}
+              {/* Platform Selector */}
               <div 
-                className="flex items-center gap-2"
-                style={{
-                  transform: `scale(${1 / editorScale})`,
-                  transformOrigin: 'left top',
-                  marginTop: `${8 * (1 / editorScale - 1)}px`,
-                  width: `${202.5 * editorScale}px`,
-                }}
+                className="flex items-center gap-2 shrink-0"
+                style={{ width: `${editorScale * 202.5}px` }}
               >
-                <button
-                  onClick={() => setPreviewPlatform('youtube')}
-                  className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${
-                    previewPlatform === 'youtube'
-                      ? 'bg-red-600/20 text-red-400'
-                      : 'text-gray-500 hover:text-gray-300'
-                  }`}
+                <select
+                  value={previewPlatform}
+                  onChange={(e) => setPreviewPlatform(e.target.value as PreviewPlatform)}
+                  className="bg-transparent border border-gray-700 rounded px-2 py-1 text-xs text-gray-400 hover:border-gray-500 focus:outline-none focus:border-purple-500"
                 >
-                  <Youtube className="w-3 h-3" />
-                  YouTube
-                </button>
-                <button
-                  onClick={() => setPreviewPlatform('tiktok')}
-                  className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${
-                    previewPlatform === 'tiktok'
-                      ? 'bg-pink-600/20 text-pink-400'
-                      : 'text-gray-500 hover:text-gray-300'
-                  }`}
-                >
-                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-5.2 1.74 2.89 2.89 0 012.31-4.64 2.93 2.93 0 01.88.13V9.4a6.84 6.84 0 00-1-.05A6.33 6.33 0 005 20.1a6.34 6.34 0 0010.86-4.43v-7a8.16 8.16 0 004.77 1.52v-3.4a4.85 4.85 0 01-1-.1z"/>
-                  </svg>
-                  TikTok
-                </button>
+                  <option value="youtube" className="bg-[#12121f]">🔴 YouTube preview</option>
+                  <option value="tiktok" className="bg-[#12121f]">TikTok preview</option>
+                </select>
               </div>
             </div>
           </div>
         </div>
 
         {/* Timeline Section */}
-        <div className="border-t border-gray-800 bg-[#12121f]">
-          {/* Video Controls */}
-          <div className="flex items-center justify-between px-4 py-2 border-b border-gray-800">
-            <div className="flex items-center gap-4">
-              {/* Time Display */}
-              <span className="text-sm font-mono text-gray-400">
-                {formatTime(currentTime)} / {formatTime(duration)}
-              </span>
-
-              {/* Playback Controls */}
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => videoRef && (videoRef.currentTime = Math.max(0, currentTime - 5))}
-                  className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white"
-                >
-                  <SkipBack className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={handlePlayPause}
-                  className="p-2 hover:bg-gray-800 rounded-lg bg-gray-700"
-                >
-                  {playing ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
-                </button>
-                <button
-                  onClick={() => videoRef && (videoRef.currentTime = Math.min(duration, currentTime + 5))}
-                  className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white"
-                >
-                  <SkipForward className="w-4 h-4" />
-                </button>
-              </div>
-
-              {/* Edit tools */}
-              <div className="flex items-center gap-1 ml-2">
-                <button className="p-2 hover:bg-gray-800 rounded text-gray-400 hover:text-white" title="Split">
-                  <Scissors className="w-4 h-4" />
-                </button>
-                <button className="p-2 hover:bg-gray-800 rounded text-gray-400 hover:text-white" title="Skip Forward">
-                  <SkipForward className="w-4 h-4" />
-                </button>
-                <button className="p-2 hover:bg-gray-800 rounded text-gray-400 hover:text-white" title="Skip Back">
-                  <SkipBack className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              {/* Volume Control */}
-              <div className="relative">
-                <button
-                  onClick={handleToggleMute}
-                  onMouseEnter={() => setShowVolume(true)}
-                  className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white"
-                >
-                  {muted || volume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-                </button>
-                {showVolume && (
-                  <div
-                    className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 p-2 bg-gray-800 rounded-lg"
-                    onMouseEnter={() => volumeButtonTimeout.current && clearTimeout(volumeButtonTimeout.current)}
-                    onMouseLeave={() => { volumeButtonTimeout.current = setTimeout(() => setShowVolume(false), 200) }}
-                  >
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      value={muted ? 0 : volume}
-                      onChange={(e) => handleChangeVolume(parseFloat(e.target.value))}
-                      className="w-20"
-                    />
-                  </div>
-                )}
-              </div>
-
-              {/* Zoom/Fit toggle */}
-              <button
-                onClick={() => setPreviewFit(previewFit === 100 ? 75 : 100)}
-                className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white text-xs font-medium"
-              >
-                {previewFit}%
-              </button>
-            </div>
-          </div>
-
-          {/* Timeline */}
-          <div className="p-4">
-            {duration > 0 && (
-              <TrimSlider
-                videoRef={videoRef}
-                duration={duration}
-                startTime={startTime}
-                endTime={endTime}
-                setStartTime={setStartTime}
-                setEndTime={setEndTime}
-                overlays={overlays}
-                setOverlays={setOverlays}
-                currentTime={currentTime}
-                selectedOverlayId={selectedOverlayId}
-                setSelectedOverlayId={setSelectedOverlayId}
-                ref={overlayBarRef}
-              />
-            )}
-          </div>
-        </div>
+        {duration > 0 && (
+          <Timeline
+            duration={duration}
+            currentTime={currentTime}
+            playing={playing}
+            muted={muted}
+            volume={volume}
+            videoRef={videoRef}
+            onPlayPause={handlePlayPause}
+            onSeek={handleSeek}
+            onToggleMute={handleToggleMute}
+            onVolumeChange={handleChangeVolume}
+            onDelete={() => {
+              if (selectedOverlayId) {
+                pushToUndoStack()
+                setOverlays(prev => prev.filter(o => o.id !== selectedOverlayId))
+                setSelectedOverlayId(null)
+              }
+            }}
+            clipName={newTitle || clip?.title || 'Video Clip'}
+            thumbnailUrl={clip?.signedUrl || undefined}
+            onNextStep={() => {
+              const currentIndex = SIDEBAR_ITEMS.findIndex(item => item.id === activeTab)
+              const nextIndex = (currentIndex + 1) % SIDEBAR_ITEMS.length
+              setActiveTab(SIDEBAR_ITEMS[nextIndex].id)
+            }}
+            nextStepLabel={SIDEBAR_ITEMS.find((_, i) => i === (SIDEBAR_ITEMS.findIndex(item => item.id === activeTab) + 1) % SIDEBAR_ITEMS.length)?.label || 'Elements'}
+            onOpenCaptions={() => setActiveTab('captions')}
+            hasCaptions={captions.length > 0}
+            overlays={overlays}
+            selectedOverlayId={selectedOverlayId}
+            onSelectOverlay={setSelectedOverlayId}
+            onUpdateOverlayTiming={(id, startTime, endTime) => {
+              pushToUndoStack()
+              setOverlays(prev => prev.map(o => 
+                o.id === id 
+                  ? { ...o, startTime, endTime }
+                  : o
+              ))
+            }}
+            canUndo={undoStack.length > 0}
+            canRedo={redoStack.length > 0}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+          />
+        )}
       </div>
     </div>
   )

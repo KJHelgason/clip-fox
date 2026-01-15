@@ -1,50 +1,134 @@
 'use client'
 
-import { useState } from 'react'
-import { LAYOUT_TEMPLATES, LayoutTemplate, AspectRatio, ASPECT_RATIOS } from '@/lib/types'
-import { Settings, Plus } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { LayoutTemplate, AspectRatio } from '@/lib/types'
+import { Settings, Plus, Trash2, X } from 'lucide-react'
+
+type UserTemplate = {
+  id: string
+  name: string
+  layoutId: string
+  cropRegions: any[]
+  createdAt: number
+}
 
 type Props = {
   selectedLayoutId?: string
-  onSelectLayout: (layout: LayoutTemplate) => void
+  onSelectLayout: (layout: LayoutTemplate | null) => void
   aspectRatio: AspectRatio
   onChangeAspectRatio: (ratio: AspectRatio) => void
+  cropRegions?: any[]
+  onApplyTemplate?: (template: UserTemplate) => void
 }
 
-// User saved templates (would come from database)
-const USER_TEMPLATES = [
-  { id: 'user-1', name: 'BETA: New Template', thumbnail: '/templates/beta.png' },
-  { id: 'user-2', name: 'COUNTER_STRIKE w...', thumbnail: '/templates/cs.png' },
-  { id: 'user-3', name: 'BEST TEMPLATE PO...', thumbnail: '/templates/best.png' },
-  { id: 'user-4', name: 'FINAL!', thumbnail: '/templates/final.png' },
-  { id: 'user-5', name: 'BEST TEMPLATE', thumbnail: '/templates/best2.png' },
+// All preset layouts matching StreamLadder
+const PRESET_LAYOUTS = [
+  { id: 'small-facecam', name: 'Small facecam' },
+  { id: 'circle-facecam', name: 'Circle facecam' },
+  { id: 'game-ui', name: 'Game UI' },
+  { id: 'split', name: 'Split' },
+  { id: 'blurred', name: 'Blurred' },
+  { id: 'fullscreen', name: 'Fullscreen' },
+  { id: 'basecam', name: 'Basecam' },
+  { id: 'mosaic', name: 'Mosaic' },
+  { id: 'dual-facecam', name: 'Dual facecam' },
+  { id: 'duo-split', name: 'Duo Split' },
+  { id: 'half', name: 'Half' },
 ]
 
-// Preset layouts matching StreamLadder
-const PRESET_LAYOUTS = [
-  { id: 'small-facecam', name: 'Small facecam', icon: '🎥' },
-  { id: 'circle-facecam', name: 'Circle facecam', icon: '⭕' },
-  { id: 'game-ui', name: 'Game UI', icon: '🎮' },
-  { id: 'split', name: 'Split', icon: '⬛' },
-  { id: 'blurred', name: 'Blurred', icon: '🌫️' },
-  { id: 'fullscreen', name: 'Fullscreen', icon: '📺' },
-]
+const STORAGE_KEY = 'clipper_user_templates'
+const LAST_LAYOUT_KEY = 'clipper_last_layout'
+const MAX_TEMPLATES = 9
 
 export default function LayoutTemplates({
   selectedLayoutId,
   onSelectLayout,
   aspectRatio,
-  onChangeAspectRatio
+  onChangeAspectRatio,
+  cropRegions = [],
+  onApplyTemplate,
 }: Props) {
   const [activeTab, setActiveTab] = useState<'all' | 'templates' | 'layouts'>('all')
+  const [userTemplates, setUserTemplates] = useState<UserTemplate[]>([])
+  const [isManaging, setIsManaging] = useState(false)
+  const [showSaveDialog, setShowSaveDialog] = useState(false)
+  const [newTemplateName, setNewTemplateName] = useState('')
 
-  // Filter layouts by current aspect ratio
-  const filteredLayouts = LAYOUT_TEMPLATES.filter(l => l.aspectRatio === aspectRatio)
+  // Load user templates from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) {
+      try {
+        setUserTemplates(JSON.parse(saved))
+      } catch (e) {
+        console.error('Failed to load user templates:', e)
+      }
+    }
+  }, [])
+
+  // Load last used layout on mount
+  useEffect(() => {
+    const lastLayout = localStorage.getItem(LAST_LAYOUT_KEY)
+    if (lastLayout && !selectedLayoutId) {
+      // Auto-select last used layout
+      const layout = PRESET_LAYOUTS.find(l => l.id === lastLayout)
+      if (layout) {
+        onSelectLayout({ id: layout.id, name: layout.name } as LayoutTemplate)
+      }
+    }
+  }, [])
+
+  // Save user templates to localStorage
+  const saveTemplates = (templates: UserTemplate[]) => {
+    setUserTemplates(templates)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(templates))
+  }
+
+  // Save last used layout
+  const handleSelectLayout = (layoutId: string) => {
+    localStorage.setItem(LAST_LAYOUT_KEY, layoutId)
+    const layout = PRESET_LAYOUTS.find(l => l.id === layoutId)
+    if (layout) {
+      onSelectLayout({ id: layout.id, name: layout.name } as LayoutTemplate)
+    }
+  }
+
+  // Add new user template
+  const handleSaveTemplate = () => {
+    if (!newTemplateName.trim() || userTemplates.length >= MAX_TEMPLATES) return
+
+    const newTemplate: UserTemplate = {
+      id: `template-${Date.now()}`,
+      name: newTemplateName.trim(),
+      layoutId: selectedLayoutId || 'custom',
+      cropRegions: cropRegions,
+      createdAt: Date.now(),
+    }
+
+    saveTemplates([...userTemplates, newTemplate])
+    setNewTemplateName('')
+    setShowSaveDialog(false)
+  }
+
+  // Delete user template
+  const handleDeleteTemplate = (templateId: string) => {
+    saveTemplates(userTemplates.filter(t => t.id !== templateId))
+  }
+
+  // Apply user template
+  const handleApplyUserTemplate = (template: UserTemplate) => {
+    if (onApplyTemplate) {
+      onApplyTemplate(template)
+    }
+    if (template.layoutId) {
+      handleSelectLayout(template.layoutId)
+    }
+  }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full overflow-hidden">
       {/* Tabs: All / Your templates / Layouts */}
-      <div className="px-3 pt-3">
+      <div className="px-3 pt-3 shrink-0">
         <div className="flex gap-1">
           {[
             { id: 'all', label: 'All' },
@@ -66,191 +150,230 @@ export default function LayoutTemplates({
         </div>
       </div>
 
-      {/* Your Templates Section */}
-      {(activeTab === 'all' || activeTab === 'templates') && (
-        <div className="px-3 pt-4">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-medium text-white">Your templates</h3>
-            <button className="text-xs text-gray-400 hover:text-white flex items-center gap-1">
-              <Settings className="w-3 h-3" />
-              Manage
-            </button>
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            {USER_TEMPLATES.map((template) => (
-              <button
-                key={template.id}
-                className="relative group rounded-lg overflow-hidden border border-gray-700 hover:border-purple-500 transition-colors"
+      <div className="flex-1 overflow-y-auto">
+        {/* Your Templates Section */}
+        {(activeTab === 'all' || activeTab === 'templates') && (
+          <div className="px-3 pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-medium text-white">Your templates</h3>
+              <button 
+                onClick={() => setIsManaging(!isManaging)}
+                className="text-xs text-gray-400 hover:text-white flex items-center gap-1"
               >
-                <div className="aspect-[9/16] bg-gradient-to-br from-purple-900/50 to-pink-900/50 flex items-center justify-center">
-                  <span className="text-2xl">🎬</span>
-                </div>
-                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-1.5">
-                  <p className="text-[10px] text-white truncate">{template.name}</p>
-                </div>
-                {/* New Crop badge */}
-                {template.name.includes('BETA') && (
-                  <div className="absolute top-1 left-1 bg-green-500 text-[8px] text-white px-1 rounded">
-                    New Crop
+                <Settings className="w-3 h-3" />
+                Manage
+              </button>
+            </div>
+            
+            {userTemplates.length === 0 ? (
+              // Empty state - Add template button
+              <button
+                onClick={() => setShowSaveDialog(true)}
+                className="w-full aspect-[9/16] max-h-32 border-2 border-dashed border-gray-700 rounded-lg flex flex-col items-center justify-center gap-2 hover:border-purple-500 hover:bg-purple-500/5 transition-colors"
+              >
+                <Plus className="w-6 h-6 text-gray-500" />
+                <span className="text-xs text-gray-500">Save current as template</span>
+              </button>
+            ) : (
+              <div className="grid grid-cols-3 gap-2">
+                {userTemplates.map((template) => (
+                  <div
+                    key={template.id}
+                    className="relative group"
+                  >
+                    <button
+                      onClick={() => !isManaging && handleApplyUserTemplate(template)}
+                      className="w-full relative rounded-lg overflow-hidden border border-gray-700 hover:border-purple-500 transition-colors"
+                    >
+                      <div className="aspect-[9/16] bg-gradient-to-br from-purple-900/50 to-pink-900/50 flex items-center justify-center">
+                        <LayoutPreview layoutId={template.layoutId} />
+                      </div>
+                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-1.5">
+                        <p className="text-[10px] text-white truncate">{template.name}</p>
+                      </div>
+                    </button>
+                    {isManaging && (
+                      <button
+                        onClick={() => handleDeleteTemplate(template.id)}
+                        className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center hover:bg-red-600 transition-colors"
+                      >
+                        <X className="w-3 h-3 text-white" />
+                      </button>
+                    )}
                   </div>
+                ))}
+                
+                {/* Add template button (if under limit) */}
+                {userTemplates.length < MAX_TEMPLATES && (
+                  <button
+                    onClick={() => setShowSaveDialog(true)}
+                    className="aspect-[9/16] border-2 border-dashed border-gray-700 rounded-lg flex flex-col items-center justify-center gap-1 hover:border-purple-500 hover:bg-purple-500/5 transition-colors"
+                  >
+                    <Plus className="w-5 h-5 text-gray-500" />
+                    <span className="text-[9px] text-gray-500">Add</span>
+                  </button>
                 )}
-              </button>
-            ))}
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Layouts Section */}
-      {(activeTab === 'all' || activeTab === 'layouts') && (
-        <div className="px-3 pt-4">
-          <h3 className="text-sm font-medium text-white mb-3">Layouts</h3>
-          <div className="grid grid-cols-3 gap-2">
-            {PRESET_LAYOUTS.map((layout) => (
-              <button
-                key={layout.id}
-                onClick={() => {
-                  const template = filteredLayouts.find(l => l.id === layout.id)
-                  if (template) onSelectLayout(template)
-                }}
-                className={`relative group rounded-lg overflow-hidden border transition-colors ${
-                  selectedLayoutId === layout.id
-                    ? 'border-purple-500 bg-purple-500/10'
-                    : 'border-gray-700 hover:border-gray-500'
-                }`}
-              >
-                <div className="aspect-[9/16] bg-[#1a1a2e] flex items-center justify-center">
-                  {/* Layout preview visualization */}
-                  <LayoutPreview layoutId={layout.id} />
-                </div>
-                <div className="p-2">
-                  <p className="text-[10px] text-gray-400 text-center">{layout.name}</p>
-                </div>
-              </button>
-            ))}
+        {/* Layouts Section */}
+        {(activeTab === 'all' || activeTab === 'layouts') && (
+          <div className="px-3 pt-4 pb-4">
+            <h3 className="text-sm font-medium text-white mb-3">Layouts</h3>
+            <div className="grid grid-cols-3 gap-2">
+              {PRESET_LAYOUTS.map((layout) => (
+                <button
+                  key={layout.id}
+                  onClick={() => handleSelectLayout(layout.id)}
+                  className={`relative group rounded-lg overflow-hidden border-2 transition-all ${
+                    selectedLayoutId === layout.id
+                      ? 'border-purple-500 ring-2 ring-purple-500/50 shadow-lg shadow-purple-500/20'
+                      : 'border-gray-700 hover:border-gray-500'
+                  }`}
+                >
+                  <div className="aspect-[9/16] bg-[#1a1a2e] flex items-center justify-center overflow-hidden">
+                    <LayoutPreview layoutId={layout.id} />
+                  </div>
+                  <div className="p-1.5 bg-[#12121f]">
+                    <p className="text-[10px] text-gray-400 text-center">{layout.name}</p>
+                  </div>
+                  {/* Selection checkmark */}
+                  {selectedLayoutId === layout.id && (
+                    <div className="absolute top-1 right-1 w-5 h-5 bg-purple-500 rounded-full flex items-center justify-center">
+                      <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
-
-      {/* Add crop button */}
-      <div className="px-3 py-4 mt-auto border-t border-gray-800">
-        <button className="w-full py-2 px-3 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-2 transition-colors">
-          <Plus className="w-4 h-4" />
-          Add crop
-        </button>
-        <label className="flex items-center gap-2 mt-3 text-xs text-gray-400">
-          <input type="checkbox" className="rounded bg-gray-800 border-gray-600" defaultChecked />
-          Enable snapping
-        </label>
+        )}
       </div>
+
+      {/* Save Template Dialog */}
+      {showSaveDialog && (
+        <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#1a1a2e] rounded-lg p-4 w-full max-w-xs border border-gray-700">
+            <h3 className="text-sm font-medium text-white mb-3">Save as Template</h3>
+            <input
+              type="text"
+              value={newTemplateName}
+              onChange={(e) => setNewTemplateName(e.target.value)}
+              placeholder="Template name..."
+              maxLength={30}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-purple-500 mb-3"
+              autoFocus
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowSaveDialog(false)}
+                className="flex-1 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveTemplate}
+                disabled={!newTemplateName.trim()}
+                className="flex-1 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm rounded-lg transition-colors"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
-// Layout preview component
+// Layout preview component with actual visual representations
 function LayoutPreview({ layoutId }: { layoutId: string }) {
+  // Colors matching StreamLadder
+  const gameColor = 'bg-gradient-to-br from-green-600 to-green-800'
+  const facecamColor = 'bg-gradient-to-br from-cyan-400 to-blue-500'
+  const blurColor = 'bg-cyan-500/30 backdrop-blur-sm'
+  
   const previewStyles: Record<string, React.ReactNode> = {
     'small-facecam': (
       <div className="w-full h-full relative">
-        <div className="absolute inset-0 bg-blue-500/30" />
-        <div className="absolute bottom-2 right-2 w-6 h-6 bg-purple-500/50 rounded" />
+        <div className={`absolute inset-0 ${gameColor}`} />
+        <div className={`absolute top-2 right-2 w-1/3 h-[20%] ${facecamColor} rounded border-2 border-purple-400`} />
       </div>
     ),
     'circle-facecam': (
       <div className="w-full h-full relative">
-        <div className="absolute inset-0 bg-blue-500/30" />
-        <div className="absolute bottom-2 right-2 w-6 h-6 bg-purple-500/50 rounded-full" />
+        <div className={`absolute inset-0 ${gameColor}`} />
+        <div className={`absolute top-2 right-2 w-8 h-8 ${facecamColor} rounded-full border-2 border-purple-400`} />
       </div>
     ),
     'game-ui': (
-      <div className="w-full h-full relative">
-        <div className="absolute inset-x-0 top-0 h-1/2 bg-blue-500/30" />
-        <div className="absolute inset-x-0 bottom-0 h-1/2 bg-green-500/30" />
+      <div className="w-full h-full relative bg-cyan-500">
+        <div className="absolute top-1 left-1 right-1 h-3 bg-red-500/80 rounded-sm flex items-center px-1 gap-0.5">
+          <div className="w-1 h-1 rounded-full bg-white" />
+          <div className="flex-1 h-0.5 bg-white/50 rounded" />
+        </div>
+        <div className={`absolute inset-x-1 top-5 bottom-[45%] ${gameColor} rounded-sm`} />
+        <div className={`absolute inset-x-1 bottom-1 h-[40%] ${facecamColor} rounded-sm`} />
       </div>
     ),
     'split': (
-      <div className="w-full h-full relative">
-        <div className="absolute inset-x-0 top-0 h-[45%] bg-blue-500/30" />
-        <div className="absolute inset-x-0 bottom-0 h-[45%] bg-purple-500/30" />
+      <div className="w-full h-full relative flex flex-col">
+        <div className={`flex-1 ${facecamColor}`} />
+        <div className={`flex-1 ${gameColor}`} />
       </div>
     ),
     'blurred': (
-      <div className="w-full h-full relative">
-        <div className="absolute inset-0 bg-gray-600/30 blur-sm" />
-        <div className="absolute inset-x-2 inset-y-4 bg-blue-500/30" />
+      <div className="w-full h-full relative bg-gray-700">
+        <div className="absolute inset-0 bg-gradient-to-b from-gray-600/50 to-gray-800/50 blur-sm" />
+        <div className={`absolute inset-x-2 inset-y-4 ${gameColor} rounded`} />
       </div>
     ),
     'fullscreen': (
-      <div className="w-full h-full bg-blue-500/30" />
+      <div className={`w-full h-full ${gameColor}`} />
+    ),
+    'basecam': (
+      <div className="w-full h-full relative flex flex-col">
+        <div className={`flex-[2] ${gameColor}`} />
+        <div className={`flex-1 ${facecamColor}`} />
+      </div>
+    ),
+    'mosaic': (
+      <div className="w-full h-full relative">
+        <div className={`absolute top-0 left-0 right-0 h-[60%] ${gameColor}`} />
+        <div className={`absolute bottom-0 left-0 w-1/2 h-[40%] ${facecamColor}`} />
+        <div className={`absolute bottom-0 right-0 w-1/2 h-[40%] ${gameColor} opacity-70`} />
+        <div className="absolute top-[30%] left-1/2 -translate-x-1/2 w-1/3 h-[25%] bg-gray-800 rounded border border-gray-600" />
+      </div>
+    ),
+    'dual-facecam': (
+      <div className="w-full h-full relative flex flex-col gap-0.5">
+        <div className={`h-[30%] ${facecamColor}`} />
+        <div className={`flex-1 ${gameColor}`} />
+        <div className={`h-[30%] ${facecamColor}`} />
+      </div>
+    ),
+    'duo-split': (
+      <div className="w-full h-full relative flex flex-col">
+        <div className={`flex-1 ${gameColor}`} />
+        <div className={`h-[35%] ${facecamColor}`} />
+      </div>
+    ),
+    'half': (
+      <div className="w-full h-full relative flex flex-col">
+        <div className={`flex-1 ${facecamColor}`} />
+        <div className={`flex-1 ${gameColor}`} />
+      </div>
+    ),
+    'custom': (
+      <div className="w-full h-full bg-gradient-to-br from-purple-900/50 to-pink-900/50 flex items-center justify-center">
+        <span className="text-2xl">🎬</span>
+      </div>
     ),
   }
 
   return previewStyles[layoutId] || <div className="w-full h-full bg-gray-700/30" />
-}
-
-function LayoutCard({
-  layout,
-  isSelected,
-  onClick
-}: {
-  layout: LayoutTemplate
-  isSelected: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`
-        relative p-2 rounded-lg border transition-all text-left
-        ${isSelected 
-          ? 'bg-purple-900/30 border-purple-500 ring-1 ring-purple-500/50' 
-          : 'bg-gray-800 border-gray-700 hover:border-gray-600'
-        }
-      `}
-    >
-      {/* Layout Preview */}
-      <div 
-        className="relative w-full bg-gray-900 rounded overflow-hidden mb-2"
-        style={{ aspectRatio: '9/16', maxHeight: 100 }}
-      >
-        {layout.regions.map((region) => (
-          <div
-            key={region.id}
-            className={`absolute ${
-              region.type === 'video' ? 'bg-blue-500/40' :
-              region.type === 'facecam' ? 'bg-purple-500/40' :
-              region.type === 'overlay' ? 'bg-green-500/40' :
-              'bg-gray-500/40'
-            }`}
-            style={{
-              left: `${region.x}%`,
-              top: `${region.y}%`,
-              width: `${region.width}%`,
-              height: `${region.height}%`,
-              borderRadius: region.borderRadius || 0,
-              border: region.border || 'none'
-            }}
-          >
-            <span className="absolute inset-0 flex items-center justify-center text-[8px] text-white/70 font-medium">
-              {region.type === 'video' ? '🎬' : region.type === 'facecam' ? '🎥' : ''}
-            </span>
-          </div>
-        ))}
-      </div>
-      
-      {/* Layout Info */}
-      <div>
-        <h4 className="text-xs font-medium text-white truncate">{layout.name}</h4>
-        <p className="text-[10px] text-gray-400 truncate">{layout.description}</p>
-      </div>
-
-      {/* Selected indicator */}
-      {isSelected && (
-        <div className="absolute top-1 right-1 w-4 h-4 bg-purple-500 rounded-full flex items-center justify-center">
-          <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-          </svg>
-        </div>
-      )}
-    </button>
-  )
 }

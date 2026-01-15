@@ -309,11 +309,12 @@ function calculateResize(
       const newHeightPercent = (newHeightPx / containerHeight) * 100
       
       // If bottom would extend beyond container, shrink width to fit
+      // This prevents crop from becoming taller than the preview container
       if (start.previewY + newHeightPercent > 100) {
         const maxHeightPercent = 100 - start.previewY
         const maxHeightPx = (maxHeightPercent / 100) * containerHeight
         const maxWidthPx = maxHeightPx * aspectRatio
-        newWidth = (maxWidthPx / containerWidth) * 100
+        newWidth = Math.max(MIN_SIZE, (maxWidthPx / containerWidth) * 100)
       }
       
       return { x: start.previewX, y: start.previewY, width: newWidth }
@@ -336,21 +337,22 @@ function calculateResize(
       }
       
       // Calculate height and check bottom edge
-      const newWidthPx = (newWidth / 100) * containerWidth
-      const newHeightPx = newWidthPx / aspectRatio
-      const newHeightPercent = (newHeightPx / containerHeight) * 100
+      let newWidthPx = (newWidth / 100) * containerWidth
+      let newHeightPx = newWidthPx / aspectRatio
+      let newHeightPercent = (newHeightPx / containerHeight) * 100
       
       // If bottom would extend beyond container, shrink width to fit
+      // This prevents crop from becoming taller than the preview container
       if (start.previewY + newHeightPercent > 100) {
         const maxHeightPercent = 100 - start.previewY
         const maxHeightPx = (maxHeightPercent / 100) * containerHeight
         const maxWidthPx = maxHeightPx * aspectRatio
-        newWidth = (maxWidthPx / containerWidth) * 100
+        newWidth = Math.max(MIN_SIZE, (maxWidthPx / containerWidth) * 100)
         newX = anchorRight - newWidth
       }
       
       // Y stays fixed (top edge anchored)
-      return { x: newX, y: start.previewY, width: Math.max(MIN_SIZE, newWidth) }
+      return { x: Math.max(0, newX), y: start.previewY, width: newWidth }
     }
     
     case 'preview-resize-tr': {
@@ -378,19 +380,20 @@ function calculateResize(
       }
       
       // Calculate new Y from anchored bottom
-      const newHeightPercent = (newHeightPx / containerHeight) * 100
+      let newHeightPercent = (newHeightPx / containerHeight) * 100
       let newY = anchorBottomPercent - newHeightPercent
       
-      // Clamp to top edge
+      // Clamp to top edge - also prevent crop from exceeding container height
       if (newY < 0) {
         newY = 0
-        const maxHeightPercent = anchorBottomPercent
+        // Max height when top is at 0 - limit to container height (100%)
+        const maxHeightPercent = Math.min(anchorBottomPercent, 100)
         const maxHeightPx = (maxHeightPercent / 100) * containerHeight
         newWidthPx = maxHeightPx * aspectRatio
-        newWidth = (newWidthPx / containerWidth) * 100
+        newWidth = Math.max(MIN_SIZE, (newWidthPx / containerWidth) * 100)
       }
       
-      return { x: start.previewX, y: newY, width: Math.max(MIN_SIZE, newWidth) }
+      return { x: start.previewX, y: Math.max(0, newY), width: newWidth }
     }
     
     case 'preview-resize-tl': {
@@ -411,7 +414,7 @@ function calculateResize(
       
       // Calculate new positions from anchors
       let newX = anchorRight - newWidth
-      const newHeightPercent = (newHeightPx / containerHeight) * 100
+      let newHeightPercent = (newHeightPx / containerHeight) * 100
       let newY = anchorBottomPercent - newHeightPercent
       
       // Clamp to left edge
@@ -420,21 +423,22 @@ function calculateResize(
         newWidth = anchorRight
         newWidthPx = (newWidth / 100) * containerWidth
         newHeightPx = newWidthPx / aspectRatio
-        const constrainedHeightPercent = (newHeightPx / containerHeight) * 100
-        newY = anchorBottomPercent - constrainedHeightPercent
+        newHeightPercent = (newHeightPx / containerHeight) * 100
+        newY = anchorBottomPercent - newHeightPercent
       }
       
-      // Clamp to top edge
+      // Clamp to top edge - also prevent crop from exceeding container height
       if (newY < 0) {
         newY = 0
-        const maxHeightPercent = anchorBottomPercent
+        // Max height when top is at 0 - limit to container height (100%)
+        const maxHeightPercent = Math.min(anchorBottomPercent, 100)
         const maxHeightPx = (maxHeightPercent / 100) * containerHeight
         newWidthPx = maxHeightPx * aspectRatio
-        newWidth = (newWidthPx / containerWidth) * 100
+        newWidth = Math.max(MIN_SIZE, (newWidthPx / containerWidth) * 100)
         newX = anchorRight - newWidth
       }
       
-      return { x: Math.max(0, newX), y: Math.max(0, newY), width: Math.max(MIN_SIZE, newWidth) }
+      return { x: Math.max(0, newX), y: Math.max(0, newY), width: newWidth }
     }
     
     default:

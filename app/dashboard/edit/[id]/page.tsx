@@ -587,6 +587,33 @@ export default function EditClipPage() {
         setShowMainCenterYLine(false)
       }
 
+      // After source crop resize, constrain preview to fit within container
+      // When source aspect ratio changes, preview height (derived from width/aspectRatio) may exceed bounds
+      if (cropDragType && cropDragType.startsWith('resize-')) {
+        const refVideoW = 160
+        const refVideoH = 90
+        const cropW = (updated.width / 100) * refVideoW
+        const cropH = (updated.height / 100) * refVideoH
+        const newAspectRatio = cropW / cropH
+        
+        // Preview container is 202.5x360 (9:16 ratio)
+        const containerWidth = 202.5
+        const containerHeight = 360
+        
+        // Calculate current preview height with new aspect ratio
+        const previewWidthPx = (updated.previewWidth / 100) * containerWidth
+        const previewHeightPx = previewWidthPx / newAspectRatio
+        const previewHeightPercent = (previewHeightPx / containerHeight) * 100
+        
+        // If preview would exceed container, reduce previewWidth to fit
+        if (updated.previewY + previewHeightPercent > 100) {
+          const maxHeightPercent = 100 - updated.previewY
+          const maxHeightPx = (maxHeightPercent / 100) * containerHeight
+          const maxWidthPx = maxHeightPx * newAspectRatio
+          updated.previewWidth = Math.max(15, (maxWidthPx / containerWidth) * 100)
+        }
+      }
+
       setCropRegions(prev => prev.map(c => c.id === dragCropId ? updated : c))
     }
 
@@ -1235,10 +1262,11 @@ export default function EditClipPage() {
           className="flex-1 flex items-center justify-center p-4 md:p-6 overflow-hidden bg-[#0a0a14]"
         >
           <div 
-            className="flex gap-8 items-start justify-center"
+            className="flex items-start justify-center"
             style={{
               transform: `scale(${editorScale})`,
               transformOrigin: 'center center',
+              gap: `${32 / editorScale}px`, // Counter-scale the gap to keep it visually constant
             }}
           >
             {/* Main Video with Crop Regions */}
@@ -1380,16 +1408,16 @@ export default function EditClipPage() {
                         )}
                       </div>
                       
-                      {/* Toolbar below selected crop */}
+                      {/* Toolbar below selected crop - counter-scaled to stay constant size */}
                       {isSelected && (
                         <div
                           className="absolute"
                           style={{
                             left: `${crop.x + crop.width / 2}%`,
                             top: `${crop.y + crop.height}%`,
-                            transform: 'translate(-50%, 8px)',
+                            transform: `translate(-50%, 8px) scale(${1 / editorScale})`,
+                            transformOrigin: 'top center',
                             zIndex: 150,
-                            maxHeight: '42px',
                           }}
                           onClick={(e) => e.stopPropagation()}
                         >

@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useState, useRef, useCallback, Suspense } from 'react'
+import React, { useEffect, useState, useRef, useCallback, Suspense, use } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { supabase } from '@/lib/supabase'
@@ -10,7 +10,11 @@ import Timeline from '@/components/editor/Timeline'
 import LayoutTemplates from '@/components/editor/LayoutTemplates'
 import { usePreviewCropDrag, CropRegion } from '@/lib/hooks/usePreviewCropDrag'
 import { PreviewCropRegion } from '@/components/editor/PreviewCropRegion'
+import { ZoomOverlay } from '@/components/editor/ZoomOverlay'
+import { EffectOverlay, useEffectTransform } from '@/components/editor/EffectOverlay'
 import { CropToolbar } from '@/components/editor/CropToolbar'
+import StickerRenderer, { StickerConfig, StickerStyle, PLATFORM_STYLES } from '@/components/editor/stickers/StickerRenderer'
+import { SocialPlatform, StickerTemplate } from '@/lib/types'
 
 // Dynamic imports for heavy editor panels - only loaded when their tab is active
 // This reduces initial bundle size and improves Time to Interactive
@@ -26,6 +30,10 @@ const ZoomEffects = dynamic(() => import('@/components/editor/ZoomEffects'), {
 
 const AudioPanel = dynamic(() => import('@/components/editor/AudioPanel'), {
   loading: () => <PanelSkeleton />,
+  ssr: false,
+})
+
+const TrimAudioModal = dynamic(() => import('@/components/editor/TrimAudioModal'), {
   ssr: false,
 })
 
@@ -54,12 +62,16 @@ function PanelSkeleton() {
     </div>
   )
 }
+
 import {
   OverlayElement,
   AspectRatio,
   LayoutTemplate,
   ZoomKeyframe,
+  VisualEffect,
+  VisualEffectType,
   CaptionStyle,
+  AudioTrack,
   findAvailableRow,
   timeToPosition,
   durationToWidth
@@ -73,17 +85,39 @@ import {
   Download,
   Undo2,
   Redo2,
-  ZoomIn,
-  Camera,
-  MoreVertical,
-  Save,
-  Trash2
+  Trash2,
+  Layers,
+  Pencil
 } from 'lucide-react'
 
 // Clip type imported from useClip hook
 
 type SidebarTab = 'layouts' | 'elements' | 'effects' | 'audio' | 'captions' | 'export'
-type PreviewPlatform = 'youtube' | 'tiktok'
+type PreviewPlatform = 'none' | 'youtube' | 'tiktok' | 'instagram'
+
+/**
+ * Z-INDEX HIERARCHY PLAN
+ * ========================
+ * This ensures proper layering of all editor elements in the preview:
+ * 
+ * BASE LAYERS (0-99):
+ * - 0-9: Blurred background video
+ * - 10-49: Crop regions (video content) - each crop uses zIndex + 10
+ * - 50-59: Crop selection/hover states
+ * - 60-69: Resize handles for crops
+ * 
+ * CONTENT LAYERS (100-199):
+ * - 100-119: Elements (stickers, images) - based on timeline row
+ * - 120-139: Effects overlays
+ * - 140-159: Caption text overlays
+ * 
+ * UI LAYERS (200-299):
+ * - 200-249: Platform preview UI (YouTube, TikTok, Instagram buttons/labels)
+ * - 250-299: Editor-only indicators (snap lines, guides)
+ * 
+ * CONTROLS (300+):
+ * - 300+: Toolbars, menus, dialogs
+ */
 
 type CaptionSegment = {
   id: string
@@ -105,7 +139,8 @@ const SIDEBAR_ITEMS: { id: SidebarTab; label: string; icon: React.ReactNode }[] 
 ]
 
 export default function EditClipPage() {
-  const { id } = useParams()
+  const params = useParams()
+  const id = params?.id as string
   const router = useRouter()
 
   // Clip data - using SWR for optimized fetching with caching
@@ -129,30 +164,50 @@ export default function EditClipPage() {
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('9:16')
   const [cropPosition, setCropPosition] = useState({ x: 0.5, y: 0.5 })
   const [selectedLayout, setSelectedLayout] = useState<LayoutTemplate | null>(null)
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
 
   // Overlays
   const [overlays, setOverlays] = useState<OverlayElement[]>([])
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null)
+  const [requestElementEditView, setRequestElementEditView] = useState(false) // Triggers edit view in ElementsPanel
   const videoContainerRef = useRef<HTMLDivElement>(null)
 
   // Overlay dragging
   const [dragOverlayId, setDragOverlayId] = useState<string | null>(null)
-  const [dragType, setDragType] = useState<'move' | 'resize' | null>(null)
+  const [dragType, setDragType] = useState<'move' | 'resize' | 'resize-tr' | 'resize-bl' | 'resize-tl' | null>(null)
   const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
   const [dragStartOverlay, setDragStartOverlay] = useState<OverlayElement | null>(null)
 
   // Effects
   const [zoomKeyframes, setZoomKeyframes] = useState<ZoomKeyframe[]>([])
+  const [selectedZoomId, setSelectedZoomId] = useState<string | null>(null)
+  const [requestZoomPanelOpen, setRequestZoomPanelOpen] = useState(false) // Triggers zoom panel to open in ZoomEffects
+  const [requestZoomPanelClose, setRequestZoomPanelClose] = useState(false) // Triggers zoom panel to close in ZoomEffects
+  const [visualEffects, setVisualEffects] = useState<VisualEffect[]>([])
+  const [selectedEffectId, setSelectedEffectId] = useState<string | null>(null)
+
+  // Effect transform for applying visual effects (shake, zoom-blur, etc.) to video content
+  const effectTransform = useEffectTransform(visualEffects, currentTime)
+
   const [captions, setCaptions] = useState<CaptionSegment[]>([])
+
+  // Audio
+  const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([])
+  const [selectedAudioId, setSelectedAudioId] = useState<string | null>(null)
+  const [trimModalTrack, setTrimModalTrack] = useState<AudioTrack | null>(null)
 
   // UI State - StreamLadder style
   const [activeTab, setActiveTab] = useState<SidebarTab>('layouts')
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [previewPlatform, setPreviewPlatform] = useState<PreviewPlatform>('youtube')
-  const [previewFit, setPreviewFit] = useState(100)
+  const [previewZoom, setPreviewZoom] = useState<'fit' | number>('fit') // 'fit' or percentage
+  const [zoomDropdownOpen, setZoomDropdownOpen] = useState(false)
 
   // Editor scale for responsive sizing
   const [editorScale, setEditorScale] = useState(1)
+  const [previewOnlyScale, setPreviewOnlyScale] = useState(1) // Scale when only preview is shown (non-layouts tabs)
+  const [layoutsFillPercent, setLayoutsFillPercent] = useState(100) // How much of available height is filled in layouts tab
+  const [previewFillPercent, setPreviewFillPercent] = useState(100) // How much of available height is filled in other tabs
   const editorContainerRef = useRef<HTMLDivElement>(null)
 
   // Crop regions for multi-crop layout
@@ -271,6 +326,19 @@ export default function EditClipPage() {
   const canUndo = undoStack.length > 0
   const canRedo = redoStack.length > 0
 
+  // Compute effective scale based on active tab
+  // For layouts tab: use editorScale (fits source + preview)
+  // For other tabs: use previewOnlyScale (fits just preview, so it's larger)
+  const currentScale = activeTab === 'layouts' ? editorScale : previewOnlyScale
+
+  // Fit percentage shows how much of available screen height is being filled
+  const fitPercentage = activeTab === 'layouts' ? layoutsFillPercent : previewFillPercent
+
+  // Compute actual zoom scale to apply as a multiplier on top of the base scale
+  // When fit: use 1 (base scale is already applied via currentScale in the container sizes)
+  // When percentage: scale relative to fit (e.g., 50% means half of fit size)
+  const zoomMultiplier = previewZoom === 'fit' ? 1 : previewZoom / 100
+
   // Load saved edit state when clip is available
   useEffect(() => {
     if (!clip || editDataLoaded) return
@@ -331,90 +399,179 @@ export default function EditClipPage() {
   
   // Sync preview background video with main video
   useEffect(() => {
-    if (!videoRef || !previewBgVideoRef.current) return
+    if (!videoRef) return
     
-    const bgVideo = previewBgVideoRef.current
+    const syncPlayState = () => {
+      const bgVideo = previewBgVideoRef.current
+      if (!bgVideo) return
+      
+      if (!videoRef.paused && bgVideo.paused) {
+        bgVideo.play().catch(() => {})
+      } else if (videoRef.paused && !bgVideo.paused) {
+        bgVideo.pause()
+      }
+    }
     
     const syncTime = () => {
+      const bgVideo = previewBgVideoRef.current
+      if (!bgVideo) return
+      
+      // Sync time if significantly different
       if (Math.abs(bgVideo.currentTime - videoRef.currentTime) > 0.5) {
         bgVideo.currentTime = videoRef.currentTime
       }
     }
     
-    const syncPlay = () => {
-      bgVideo.play().catch(() => {})
-    }
-    
-    const syncPause = () => {
-      bgVideo.pause()
-    }
-    
     const syncSeek = () => {
-      bgVideo.currentTime = videoRef.currentTime
+      const bgVideo = previewBgVideoRef.current
+      if (bgVideo) {
+        bgVideo.currentTime = videoRef.currentTime
+      }
     }
     
-    videoRef.addEventListener('play', syncPlay)
-    videoRef.addEventListener('pause', syncPause)
+    videoRef.addEventListener('play', syncPlayState)
+    videoRef.addEventListener('pause', syncPlayState)
     videoRef.addEventListener('seeked', syncSeek)
     videoRef.addEventListener('timeupdate', syncTime)
     
-    // Initial sync
-    bgVideo.currentTime = videoRef.currentTime
-    if (!videoRef.paused) {
-      bgVideo.play().catch(() => {})
-    }
-    
     return () => {
-      videoRef.removeEventListener('play', syncPlay)
-      videoRef.removeEventListener('pause', syncPause)
+      videoRef.removeEventListener('play', syncPlayState)
+      videoRef.removeEventListener('pause', syncPlayState)
       videoRef.removeEventListener('seeked', syncSeek)
       videoRef.removeEventListener('timeupdate', syncTime)
     }
   }, [videoRef])
+  
+  // Sync preview video when playing state changes
+  useEffect(() => {
+    const bgVideo = previewBgVideoRef.current
+    if (!bgVideo || !videoRef) return
+    
+    // Sync time first
+    bgVideo.currentTime = videoRef.currentTime
+    
+    // Then sync play state
+    if (playing) {
+      bgVideo.play().catch(() => {})
+    } else {
+      bgVideo.pause()
+    }
+  }, [playing, videoRef])
 
   // Calculate editor scale based on viewport size
   // editorScale determines the height of the video panels (height = scale * 360px)
+  // Uses ResizeObserver to detect container size changes (e.g., when timeline expands with overlays)
   useEffect(() => {
     const calculateScale = () => {
       if (!editorContainerRef.current) return
-      
+
       const container = editorContainerRef.current
-      const availableWidth = container.clientWidth
-      const availableHeight = container.clientHeight
-      
+      const availableWidth = container.clientWidth - 64 // padding
+      const availableHeight = container.clientHeight - 92 // header + padding
+
+      // Prevent calculation with invalid dimensions
+      if (availableWidth <= 0 || availableHeight <= 0) return
+
       // At scale 1.0:
       // - Source video: 640x360 (16:9)
       // - Preview: 202.5x360 (9:16)
       // - Gap: 32px
-      // - Headers/controls: ~60px height
-      // Total width = 640 + 202.5 + 32 = 874.5px
-      // Total height = 360 + 60 = 420px
-      
       const baseSourceWidth = 640
       const basePreviewWidth = 202.5
       const baseGap = 32
       const baseHeight = 360
-      const headerHeight = 60
-      
-      // Calculate max scale that fits both width and height
-      const maxScaleForWidth = (availableWidth - 64) / (baseSourceWidth + basePreviewWidth + baseGap)
-      const maxScaleForHeight = (availableHeight - headerHeight - 32) / baseHeight
-      
-      const scale = Math.min(1.4, maxScaleForWidth, maxScaleForHeight) // Max scale 1.4x
-      
-      setEditorScale(Math.max(0.4, scale)) // Min scale 0.4
+
+      // For layouts tab: fit source + preview + gap
+      const layoutsTotalWidth = baseSourceWidth + basePreviewWidth + baseGap
+      const layoutsScaleForWidth = availableWidth / layoutsTotalWidth
+      const layoutsScaleForHeight = availableHeight / baseHeight
+      // Use whichever constraint is tighter (min) to prevent overflow
+      const layoutsFitScale = Math.min(layoutsScaleForWidth, layoutsScaleForHeight)
+      setEditorScale(Math.max(0.3, layoutsFitScale))
+
+      // Calculate what percentage of available height is being filled
+      // If width-constrained: height used = layoutsFitScale * baseHeight
+      // Fill percent = (height used / availableHeight) * 100
+      const layoutsActualHeight = layoutsFitScale * baseHeight
+      setLayoutsFillPercent(Math.round((layoutsActualHeight / availableHeight) * 100))
+
+      // For other tabs: fit just preview
+      const previewScaleForWidth = availableWidth / basePreviewWidth
+      const previewScaleForHeight = availableHeight / baseHeight
+      // Use whichever constraint is tighter (min) to prevent overflow
+      const previewFitScale = Math.min(previewScaleForWidth, previewScaleForHeight)
+      setPreviewOnlyScale(Math.max(0.3, previewFitScale))
+
+      // Calculate fill percent for preview-only mode
+      const previewActualHeight = previewFitScale * baseHeight
+      setPreviewFillPercent(Math.round((previewActualHeight / availableHeight) * 100))
     }
-    
+
     // Initial calculation with delay to ensure container is rendered
     const timer = setTimeout(calculateScale, 100)
     calculateScale()
-    
+
+    // Use ResizeObserver to detect container size changes
+    // This handles: window resize, timeline height changes, sidebar changes, etc.
+    const resizeObserver = new ResizeObserver(() => {
+      // Debounce the calculation to avoid excessive updates
+      requestAnimationFrame(calculateScale)
+    })
+
+    if (editorContainerRef.current) {
+      resizeObserver.observe(editorContainerRef.current)
+    }
+
+    // Also listen for window resize as fallback
     window.addEventListener('resize', calculateScale)
+
     return () => {
       clearTimeout(timer)
+      resizeObserver.disconnect()
       window.removeEventListener('resize', calculateScale)
     }
   }, [clip, loading])
+
+  // Recalculate scale when overlays change (timeline might expand/contract)
+  // This is a fallback in case ResizeObserver doesn't catch the change immediately
+  useEffect(() => {
+    if (!editorContainerRef.current) return
+
+    // Small delay to let the timeline re-render first
+    const timer = setTimeout(() => {
+      if (!editorContainerRef.current) return
+
+      const container = editorContainerRef.current
+      const availableWidth = container.clientWidth - 64
+      const availableHeight = container.clientHeight - 92
+
+      if (availableWidth <= 0 || availableHeight <= 0) return
+
+      const baseSourceWidth = 640
+      const basePreviewWidth = 202.5
+      const baseGap = 32
+      const baseHeight = 360
+
+      const layoutsTotalWidth = baseSourceWidth + basePreviewWidth + baseGap
+      const layoutsScaleForWidth = availableWidth / layoutsTotalWidth
+      const layoutsScaleForHeight = availableHeight / baseHeight
+      const layoutsFitScale = Math.min(layoutsScaleForWidth, layoutsScaleForHeight)
+      setEditorScale(Math.max(0.3, layoutsFitScale))
+
+      const layoutsActualHeight = layoutsFitScale * baseHeight
+      setLayoutsFillPercent(Math.round((layoutsActualHeight / availableHeight) * 100))
+
+      const previewScaleForWidth = availableWidth / basePreviewWidth
+      const previewScaleForHeight = availableHeight / baseHeight
+      const previewFitScale = Math.min(previewScaleForWidth, previewScaleForHeight)
+      setPreviewOnlyScale(Math.max(0.3, previewFitScale))
+
+      const previewActualHeight = previewFitScale * baseHeight
+      setPreviewFillPercent(Math.round((previewActualHeight / availableHeight) * 100))
+    }, 50)
+
+    return () => clearTimeout(timer)
+  }, [overlays.length])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -464,7 +621,7 @@ export default function EditClipPage() {
   const handleOverlayMouseDown = (
     e: React.MouseEvent<HTMLDivElement>,
     overlayId: string,
-    type: 'move' | 'resize'
+    type: 'move' | 'resize' | 'resize-tr' | 'resize-bl' | 'resize-tl'
   ) => {
     setDragOverlayId(overlayId)
     setDragType(type)
@@ -475,37 +632,87 @@ export default function EditClipPage() {
     e.stopPropagation()
   }
 
-  const handleOverlayMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!dragOverlayId || !dragType || !dragStartOverlay || !videoContainerRef.current) return
-    const dx = e.clientX - dragStart.x
-    const dy = e.clientY - dragStart.y
-    const videoRect = videoContainerRef.current.getBoundingClientRect()
-    let updated: OverlayElement | null = null
+  // Global mouse event handling for overlay dragging
+  useEffect(() => {
+    const handleGlobalOverlayMouseMove = (e: MouseEvent) => {
+      if (!dragOverlayId || !dragType || !dragStartOverlay) return
 
-    if (dragType === 'move') {
-      let newLeft = dragStartOverlay.videoLeft + dx
-      let newTop = dragStartOverlay.videoTop + dy
-      newLeft = Math.max(0, Math.min(videoRect.width - dragStartOverlay.videoWidth, newLeft))
-      newTop = Math.max(0, Math.min(videoRect.height - dragStartOverlay.videoHeight, newTop))
-      updated = { ...dragStartOverlay, videoLeft: newLeft, videoTop: newTop }
-    } else if (dragType === 'resize') {
-      let newWidth = dragStartOverlay.videoWidth + dx
-      let newHeight = dragStartOverlay.videoHeight + dy
-      newWidth = Math.max(30, Math.min(videoRect.width - dragStartOverlay.videoLeft, newWidth))
-      newHeight = Math.max(20, Math.min(videoRect.height - dragStartOverlay.videoTop, newHeight))
-      updated = { ...dragStartOverlay, videoWidth: newWidth, videoHeight: newHeight }
+      // Use preview container when source video is hidden, otherwise use source video container
+      const containerRef = activeTab === 'layouts' ? videoContainerRef : previewContainerRef
+      if (!containerRef.current) return
+
+      const dx = e.clientX - dragStart.x
+      const dy = e.clientY - dragStart.y
+      const videoRect = containerRef.current.getBoundingClientRect()
+      let updated: OverlayElement | null = null
+
+      // Convert pixel delta to percentage
+      const dxPercent = (dx / videoRect.width) * 100
+      const dyPercent = (dy / videoRect.height) * 100
+
+      if (dragType === 'move') {
+        // Allow elements to clip off screen (no constraints)
+        const newLeft = dragStartOverlay.videoLeft + dxPercent
+        const newTop = dragStartOverlay.videoTop + dyPercent
+        updated = { ...dragStartOverlay, videoLeft: newLeft, videoTop: newTop }
+      } else if (dragType === 'resize' || dragType === 'resize-tr' || dragType === 'resize-bl' || dragType === 'resize-tl') {
+        // Fixed aspect ratio resize
+        const aspectRatio = dragStartOverlay.aspectRatio || (dragStartOverlay.videoWidth / dragStartOverlay.videoHeight)
+
+        let newWidth: number
+        let newHeight: number
+        let newLeft = dragStartOverlay.videoLeft
+        let newTop = dragStartOverlay.videoTop
+
+        if (dragType === 'resize') {
+          // Bottom-right: width and height grow
+          newWidth = Math.max(5, dragStartOverlay.videoWidth + dxPercent)
+          newHeight = newWidth / aspectRatio
+        } else if (dragType === 'resize-tr') {
+          // Top-right: width grows right, top moves up as height increases
+          newWidth = Math.max(5, dragStartOverlay.videoWidth + dxPercent)
+          newHeight = newWidth / aspectRatio
+          newTop = dragStartOverlay.videoTop + dragStartOverlay.videoHeight - newHeight
+        } else if (dragType === 'resize-bl') {
+          // Bottom-left: width grows left
+          newWidth = Math.max(5, dragStartOverlay.videoWidth - dxPercent)
+          newHeight = newWidth / aspectRatio
+          newLeft = dragStartOverlay.videoLeft + dragStartOverlay.videoWidth - newWidth
+        } else {
+          // Top-left: both shrink toward bottom-right
+          newWidth = Math.max(5, dragStartOverlay.videoWidth - dxPercent)
+          newHeight = newWidth / aspectRatio
+          newLeft = dragStartOverlay.videoLeft + dragStartOverlay.videoWidth - newWidth
+          newTop = dragStartOverlay.videoTop + dragStartOverlay.videoHeight - newHeight
+        }
+
+        // Allow elements to clip off screen (no constraints on position/size)
+        updated = { ...dragStartOverlay, videoLeft: newLeft, videoTop: newTop, videoWidth: newWidth, videoHeight: newHeight }
+      }
+
+      if (updated) {
+        setOverlays(prev => prev.map(el => el.id === dragOverlayId ? updated! : el))
+      }
     }
 
-    if (updated) {
-      setOverlays(prev => prev.map(el => el.id === dragOverlayId ? updated! : el))
+    const handleGlobalOverlayMouseUp = () => {
+      if (dragOverlayId) {
+        setDragOverlayId(null)
+        setDragType(null)
+        setDragStartOverlay(null)
+      }
     }
-  }
 
-  const handleOverlayMouseUp = () => {
-    setDragOverlayId(null)
-    setDragType(null)
-    setDragStartOverlay(null)
-  }
+    if (dragOverlayId) {
+      document.addEventListener('mousemove', handleGlobalOverlayMouseMove)
+      document.addEventListener('mouseup', handleGlobalOverlayMouseUp)
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleGlobalOverlayMouseMove)
+      document.removeEventListener('mouseup', handleGlobalOverlayMouseUp)
+    }
+  }, [dragOverlayId, dragType, dragStart, dragStartOverlay, activeTab])
 
   // Crop region handlers (main video only - preview handled by usePreviewCropDrag hook)
   const handleCropMouseDown = (
@@ -520,6 +727,8 @@ export default function EditClipPage() {
     const crop = cropRegions.find(c => c.id === cropId)
     setCropDragStartRegion(crop || null)
     setSelectedCropId(cropId)
+    // Deselect any selected overlay for single selection
+    setSelectedOverlayId(null)
   }
 
   const handleCropMouseUp = () => {
@@ -540,7 +749,7 @@ export default function EditClipPage() {
       const dx = ((e.clientX - cropDragStart.x) / rect.width) * 100
       const dy = ((e.clientY - cropDragStart.y) / rect.height) * 100
 
-      let updated = { ...cropDragStartRegion }
+      const updated = { ...cropDragStartRegion }
       
       // Get aspect ratio constraint relative to 16:9 container
       // Final aspect = (width% / height%) * (16/9)
@@ -561,42 +770,42 @@ export default function EditClipPage() {
       } else if (cropDragType === 'resize-br') {
         if (relativeAspect) {
           // Maintain aspect ratio: height = width / relativeAspect
-          const newWidth = Math.max(10, Math.min(100 - updated.x, cropDragStartRegion.width + dx))
+          const newWidth = Math.max(3, Math.min(100 - updated.x, cropDragStartRegion.width + dx))
           updated.width = newWidth
-          updated.height = Math.max(10, Math.min(100 - updated.y, newWidth / relativeAspect))
+          updated.height = Math.max(3, Math.min(100 - updated.y, newWidth / relativeAspect))
         } else {
-          updated.width = Math.max(10, Math.min(100 - updated.x, cropDragStartRegion.width + dx))
-          updated.height = Math.max(10, Math.min(100 - updated.y, cropDragStartRegion.height + dy))
+          updated.width = Math.max(3, Math.min(100 - updated.x, cropDragStartRegion.width + dx))
+          updated.height = Math.max(3, Math.min(100 - updated.y, cropDragStartRegion.height + dy))
         }
       } else if (cropDragType === 'resize-bl') {
         const newX = cropDragStartRegion.x + dx
         const newWidth = cropDragStartRegion.width - dx
-        if (newX >= 0 && newWidth >= 10) {
+        if (newX >= 0 && newWidth >= 3) {
           updated.x = newX
           updated.width = newWidth
         }
         if (relativeAspect) {
           // Maintain aspect ratio: height = width / relativeAspect
-          updated.height = Math.max(10, Math.min(100 - updated.y, updated.width / relativeAspect))
+          updated.height = Math.max(3, Math.min(100 - updated.y, updated.width / relativeAspect))
         } else {
-          updated.height = Math.max(10, Math.min(100 - updated.y, cropDragStartRegion.height + dy))
+          updated.height = Math.max(3, Math.min(100 - updated.y, cropDragStartRegion.height + dy))
         }
       } else if (cropDragType === 'resize-tr') {
         if (relativeAspect) {
           // Maintain aspect ratio: height = width / relativeAspect
-          const newWidth = Math.max(10, Math.min(100 - updated.x, cropDragStartRegion.width + dx))
+          const newWidth = Math.max(3, Math.min(100 - updated.x, cropDragStartRegion.width + dx))
           updated.width = newWidth
           const newHeight = newWidth / relativeAspect
           const newY = cropDragStartRegion.y + cropDragStartRegion.height - newHeight
-          if (newY >= 0 && newHeight >= 10) {
+          if (newY >= 0 && newHeight >= 3) {
             updated.y = newY
             updated.height = newHeight
           }
         } else {
-          updated.width = Math.max(10, Math.min(100 - updated.x, cropDragStartRegion.width + dx))
+          updated.width = Math.max(3, Math.min(100 - updated.x, cropDragStartRegion.width + dx))
           const newY = cropDragStartRegion.y + dy
           const newHeight = cropDragStartRegion.height - dy
-          if (newY >= 0 && newHeight >= 10) {
+          if (newY >= 0 && newHeight >= 3) {
             updated.y = newY
             updated.height = newHeight
           }
@@ -608,7 +817,7 @@ export default function EditClipPage() {
           const newHeight = newWidth / relativeAspect
           const newX = cropDragStartRegion.x + cropDragStartRegion.width - newWidth
           const newY = cropDragStartRegion.y + cropDragStartRegion.height - newHeight
-          if (newX >= 0 && newWidth >= 10 && newY >= 0 && newHeight >= 10) {
+          if (newX >= 0 && newWidth >= 3 && newY >= 0 && newHeight >= 3) {
             updated.x = newX
             updated.width = newWidth
             updated.y = newY
@@ -619,11 +828,11 @@ export default function EditClipPage() {
           const newWidth = cropDragStartRegion.width - dx
           const newY = cropDragStartRegion.y + dy
           const newHeight = cropDragStartRegion.height - dy
-          if (newX >= 0 && newWidth >= 10) {
+          if (newX >= 0 && newWidth >= 3) {
             updated.x = newX
             updated.width = newWidth
           }
-          if (newY >= 0 && newHeight >= 10) {
+          if (newY >= 0 && newHeight >= 3) {
             updated.y = newY
             updated.height = newHeight
           }
@@ -867,7 +1076,7 @@ export default function EditClipPage() {
     setCropRegions(prev => prev.map(c => {
       if (c.id !== cropId) return c
       
-      let updated = { ...c, aspectRatio: ratio }
+      const updated = { ...c, aspectRatio: ratio }
       
       // Source video is 16:9, so percentages are relative to that
       // To get final aspect ratio: (width% / height%) * (16/9)
@@ -1059,13 +1268,36 @@ export default function EditClipPage() {
     const st = overlay.startTime ?? currentTime
     const et = overlay.endTime ?? Math.min(duration, st + 3)
 
+    // Calculate default sizes based on element type
+    // Preview is 9:16 aspect ratio (202.5 x 360 at scale 1)
+    // Values are in percentages
+    let defaultWidth = 50  // 50% of container width
+    let defaultHeight = 15 // 15% of container height
+    let defaultLeft = 25   // Center horizontally: (100 - 50) / 2
+    let defaultTop = 40    // Near center vertically
+
+    // Adjust defaults based on element type
+    if (overlay.type === 'image' || overlay.type === 'social-sticker') {
+      // Images/stickers: square-ish, smaller
+      defaultWidth = 40
+      defaultHeight = 20
+      defaultLeft = 30
+      defaultTop = 40
+    } else if (overlay.type === 'text' || overlay.type === 'caption') {
+      // Text: wider, shorter
+      defaultWidth = 80
+      defaultHeight = 12
+      defaultLeft = 10
+      defaultTop = 75 // Near bottom for captions
+    }
+
     const newOverlay: OverlayElement = {
       id: `overlay-${Date.now()}`,
       type: 'text',
-      videoLeft: 40,
-      videoTop: 40,
-      videoWidth: 150,
-      videoHeight: 40,
+      videoLeft: defaultLeft,
+      videoTop: defaultTop,
+      videoWidth: defaultWidth,
+      videoHeight: defaultHeight,
       timelineLeft: timeToPosition(st, duration, barWidth),
       timelineTop: 0,
       timelineWidth: durationToWidth(et - st, duration, barWidth),
@@ -1076,9 +1308,17 @@ export default function EditClipPage() {
       fontSize: 24,
       fontWeight: 'bold',
       color: '#ffffff',
-      backgroundColor: 'rgba(0,0,0,0.7)',
+      backgroundColor: 'transparent',
       ...overlay,
     } as OverlayElement
+
+    // Ensure the overlay fits within the container
+    if (newOverlay.videoLeft + newOverlay.videoWidth > 100) {
+      newOverlay.videoWidth = 100 - newOverlay.videoLeft
+    }
+    if (newOverlay.videoTop + newOverlay.videoHeight > 100) {
+      newOverlay.videoHeight = 100 - newOverlay.videoTop
+    }
 
     newOverlay.row = findAvailableRow(overlays, { startTime: st, endTime: et, id: newOverlay.id })
     setOverlays(prev => [...prev, newOverlay])
@@ -1129,14 +1369,15 @@ export default function EditClipPage() {
     })
   }
 
-  // Save handler
-  const handleSave = async () => {
-    if (!clip) return
+  // Save handler (silent auto-save)
+  const handleSave = useCallback(async () => {
+    if (!clip || saving) return
     setSaving(true)
 
     const editData = JSON.stringify({
       aspectRatio,
       cropPosition,
+      cropRegions,
       overlays,
       startTime,
       endTime,
@@ -1144,19 +1385,24 @@ export default function EditClipPage() {
       zoomKeyframes,
     })
 
-    const { error } = await supabase
+    await supabase
       .from('clips')
       .update({ title: newTitle, edited: true, edit_data: editData })
       .eq('id', clip.id)
 
-    if (error) {
-      alert('Failed to save changes.')
-    } else {
-      alert('Changes saved!')
-    }
-
     setSaving(false)
-  }
+  }, [clip, saving, aspectRatio, cropPosition, cropRegions, overlays, startTime, endTime, thumbs, zoomKeyframes, newTitle])
+  
+  // Auto-save when relevant state changes (debounced)
+  useEffect(() => {
+    if (!clip || !editDataLoaded) return
+    
+    const timeoutId = setTimeout(() => {
+      handleSave()
+    }, 2000) // Save 2 seconds after last change
+    
+    return () => clearTimeout(timeoutId)
+  }, [aspectRatio, cropPosition, cropRegions, overlays, startTime, endTime, thumbs, zoomKeyframes, newTitle, clip, editDataLoaded])
 
   // Export handler
   const handleExport = async () => {
@@ -1168,29 +1414,150 @@ export default function EditClipPage() {
   const getCurrentZoom = useCallback(() => {
     if (zoomKeyframes.length === 0) return { scale: 1, x: 50, y: 50 }
 
-    const sorted = [...zoomKeyframes].sort((a, b) => a.time - b.time)
-    if (currentTime <= sorted[0].time) return { scale: sorted[0].scale, x: sorted[0].x, y: sorted[0].y }
-    if (currentTime >= sorted[sorted.length - 1].time) {
-      const last = sorted[sorted.length - 1]
-      return { scale: last.scale, x: last.x, y: last.y }
+    // Group keyframes by segmentId
+    const segmentGroups = new Map<string, typeof zoomKeyframes>()
+    for (const kf of zoomKeyframes) {
+      const segId = kf.segmentId || kf.id
+      if (!segmentGroups.has(segId)) {
+        segmentGroups.set(segId, [])
+      }
+      segmentGroups.get(segId)!.push(kf)
     }
 
-    for (let i = 0; i < sorted.length - 1; i++) {
-      if (currentTime >= sorted[i].time && currentTime <= sorted[i + 1].time) {
-        const from = sorted[i]
-        const to = sorted[i + 1]
-        const progress = (currentTime - from.time) / (to.time - from.time)
+    // Find the segment that contains the current time
+    for (const [, segmentKeyframes] of segmentGroups) {
+      if (segmentKeyframes.length < 2) continue
+
+      const sorted = [...segmentKeyframes].sort((a, b) => a.time - b.time)
+      const startKf = sorted[0]
+      const endKf = sorted[sorted.length - 1]
+
+      // Check if current time is within this segment's time range
+      if (currentTime >= startKf.time && currentTime <= endKf.time) {
+        // Use constant zoom values from the start keyframe throughout the segment
+        // (no interpolation - zoom stays the same for the entire duration)
         return {
-          scale: from.scale + (to.scale - from.scale) * progress,
-          x: from.x + (to.x - from.x) * progress,
-          y: from.y + (to.y - from.y) * progress,
+          scale: startKf.scale,
+          x: startKf.x,
+          y: startKf.y,
         }
       }
     }
+
+    // No active zoom at current time
     return { scale: 1, x: 50, y: 50 }
   }, [zoomKeyframes, currentTime])
 
   const currentZoom = getCurrentZoom()
+
+  // Handle zoom segment timing updates from timeline dragging
+  const handleUpdateZoomTiming = useCallback((segmentId: string, newStartTime: number, newEndTime: number) => {
+    // Find all keyframes belonging to this segment
+    const segmentKeyframes = zoomKeyframes.filter(kf =>
+      kf.segmentId === segmentId || kf.id === segmentId
+    )
+
+    if (segmentKeyframes.length < 2) return
+
+    const sorted = [...segmentKeyframes].sort((a, b) => a.time - b.time)
+    const startKeyframe = sorted[0]
+    const endKeyframe = sorted[sorted.length - 1]
+
+    // Update the keyframes with new times
+    setZoomKeyframes(prev => prev.map(kf => {
+      if (kf.id === startKeyframe.id) {
+        return { ...kf, time: newStartTime }
+      }
+      if (kf.id === endKeyframe.id) {
+        return { ...kf, time: newEndTime }
+      }
+      return kf
+    }))
+  }, [zoomKeyframes])
+
+  // Handle zoom segment deletion
+  const handleDeleteZoom = useCallback((segmentId: string) => {
+    // Remove all keyframes belonging to this segment
+    setZoomKeyframes(prev => prev.filter(kf =>
+      kf.segmentId !== segmentId && kf.id !== segmentId
+    ))
+    setSelectedZoomId(null)
+    // Return to effects menu by closing the zoom panel
+    setRequestZoomPanelClose(true)
+  }, [])
+
+  // Visual effect handlers
+  const handleAddVisualEffect = useCallback((effectType: VisualEffectType) => {
+    const newEffect: VisualEffect = {
+      id: `effect-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      type: effectType,
+      startTime: currentTime,
+      endTime: Math.min(currentTime + 1, duration), // 1 second default duration
+    }
+    setVisualEffects(prev => [...prev, newEffect])
+    setSelectedEffectId(newEffect.id)
+  }, [currentTime, duration])
+
+  const handleUpdateVisualEffectTiming = useCallback((effectId: string, newStartTime: number, newEndTime: number) => {
+    setVisualEffects(prev => prev.map(effect =>
+      effect.id === effectId
+        ? { ...effect, startTime: newStartTime, endTime: newEndTime }
+        : effect
+    ))
+  }, [])
+
+  const handleDeleteVisualEffect = useCallback((effectId: string) => {
+    setVisualEffects(prev => prev.filter(effect => effect.id !== effectId))
+    setSelectedEffectId(null)
+  }, [])
+
+  // Audio track handlers
+  const handleAddAudioTrack = useCallback((track: AudioTrack) => {
+    setAudioTracks(prev => [...prev, track])
+    setSelectedAudioId(track.id)
+    // Switch to audio tab to show the properties
+    setActiveTab('audio')
+  }, [])
+
+  const handleUpdateAudioTrack = useCallback((updatedTrack: AudioTrack) => {
+    setAudioTracks(prev => prev.map(t =>
+      t.id === updatedTrack.id ? updatedTrack : t
+    ))
+  }, [])
+
+  const handleUpdateAudioTiming = useCallback((audioId: string, newStartTime: number, newEndTime: number) => {
+    setAudioTracks(prev => prev.map(track => {
+      if (track.id === audioId) {
+        // Calculate new duration based on timing change
+        const newDuration = newEndTime - newStartTime
+        return {
+          ...track,
+          startTime: newStartTime,
+          // Adjust trimEnd if duration changed
+          trimEnd: Math.max(0, track.duration - track.trimStart - newDuration),
+        }
+      }
+      return track
+    }))
+  }, [])
+
+  const handleDeleteAudio = useCallback((audioId: string) => {
+    setAudioTracks(prev => prev.filter(t => t.id !== audioId))
+    setSelectedAudioId(null)
+  }, [])
+
+  const handleTrimAudio = useCallback((trimStart: number, trimEnd: number) => {
+    if (!trimModalTrack) return
+    setAudioTracks(prev => prev.map(t =>
+      t.id === trimModalTrack.id
+        ? { ...t, trimStart, trimEnd }
+        : t
+    ))
+    setTrimModalTrack(null)
+  }, [trimModalTrack])
+
+  // Get selected audio track
+  const selectedAudioTrack = audioTracks.find(t => t.id === selectedAudioId) || null
 
   // Get selected overlay
   const selectedOverlay = overlays.find(o => o.id === selectedOverlayId) || null
@@ -1237,8 +1604,13 @@ export default function EditClipPage() {
             <button
               key={item.id}
               onClick={() => {
-                setActiveTab(item.id)
-                setIsSidebarCollapsed(false)
+                // If clicking on Elements tab while already on it, deselect current element to go back to main view
+                if (item.id === 'elements' && activeTab === 'elements' && selectedOverlayId) {
+                  setSelectedOverlayId(null)
+                } else {
+                  setActiveTab(item.id)
+                  setIsSidebarCollapsed(false)
+                }
               }}
               className={`w-full py-3 px-2 flex flex-col items-center gap-1 transition-all ${
                 activeTab === item.id
@@ -1295,9 +1667,11 @@ export default function EditClipPage() {
           {activeTab === 'layouts' && (
             <LayoutTemplates
               selectedLayoutId={selectedLayout?.id}
-              onSelectLayout={(layout) => {
+              selectedTemplateId={selectedTemplateId || undefined}
+              onSelectLayout={(layout, templateId) => {
                 pushToUndoStack()
                 setSelectedLayout(layout)
+                setSelectedTemplateId(templateId || null)
               }}
               aspectRatio={aspectRatio}
               onChangeAspectRatio={setAspectRatio}
@@ -1312,10 +1686,14 @@ export default function EditClipPage() {
           )}
           {activeTab === 'elements' && (
             <ElementsPanel
-              onAddSticker={handleAddOverlay}
-              onAddText={handleAddOverlay}
+              onAddElement={handleAddOverlay}
+              onUpdateElement={handleUpdateOverlay}
+              selectedElement={selectedOverlay}
               currentTime={currentTime}
               duration={duration}
+              userId={clip?.user_id}
+              requestEditView={requestElementEditView}
+              onEditViewOpened={() => setRequestElementEditView(false)}
             />
           )}
           {activeTab === 'effects' && (
@@ -1325,16 +1703,23 @@ export default function EditClipPage() {
               duration={duration}
               currentTime={currentTime}
               onSeek={handleSeek}
+              videoSrc={clip?.signedUrl || ''}
+              openZoomPanel={requestZoomPanelOpen}
+              onZoomPanelOpened={() => setRequestZoomPanelOpen(false)}
+              closeZoomPanel={requestZoomPanelClose}
+              onZoomPanelClosed={() => setRequestZoomPanelClose(false)}
+              onDeselectZoom={() => setSelectedZoomId(null)}
+              onAddVisualEffect={handleAddVisualEffect}
             />
           )}
           {activeTab === 'audio' && (
             <AudioPanel
-              onAddAudioTrack={(track) => {
-                // TODO: Handle audio track addition to timeline
-                console.log('Adding audio track:', track)
-              }}
+              onAddAudioTrack={handleAddAudioTrack}
               currentTime={currentTime}
               duration={duration}
+              selectedAudioTrack={selectedAudioTrack}
+              onUpdateAudioTrack={handleUpdateAudioTrack}
+              onOpenTrimModal={(track) => setTrimModalTrack(track)}
             />
           )}
           {activeTab === 'captions' && (
@@ -1361,8 +1746,9 @@ export default function EditClipPage() {
           )}
           </div>
 
-          {/* Properties Panel (when overlay or crop selected) */}
-          {selectedOverlay && (
+          {/* Properties Panel (when overlay selected but NOT on elements tab - elements tab has its own edit UI) */}
+          {/* Also exclude social-sticker, text, caption, and image types as they are edited in ElementsPanel */}
+          {selectedOverlay && activeTab !== 'elements' && !['social-sticker', 'text', 'caption', 'image'].includes(selectedOverlay.type) && (
           <div className="border-t border-gray-800 max-h-48 overflow-y-auto">
             <OverlayProperties
               overlay={selectedOverlay}
@@ -1402,20 +1788,6 @@ export default function EditClipPage() {
           </div>
           )}
 
-          {/* Panel Footer - Next Tab Navigation */}
-          <div className="p-3 border-t border-gray-800">
-          <button
-            onClick={() => {
-              const currentIndex = SIDEBAR_ITEMS.findIndex(item => item.id === activeTab)
-              const nextIndex = (currentIndex + 1) % SIDEBAR_ITEMS.length
-              setActiveTab(SIDEBAR_ITEMS[nextIndex].id)
-            }}
-            className="w-full py-2.5 px-4 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-2 transition-colors"
-          >
-            {SIDEBAR_ITEMS.find(item => item.id === activeTab)?.label}
-            <span className="text-xs">→</span>
-          </button>
-          </div>
         </div>
       )}
 
@@ -1424,26 +1796,28 @@ export default function EditClipPage() {
         {/* Top Bar */}
         <div className="h-14 px-4 flex items-center justify-between border-b border-gray-800 bg-[#12121f]">
           <div className="flex items-center gap-3">
-            {/* Undo/Redo */}
-            <div className="flex items-center gap-1">
+            {/* Undo/Redo - Connected buttons with separator */}
+            <div className="flex items-center border border-gray-600 rounded-lg overflow-hidden">
               <button
                 onClick={handleUndo}
                 disabled={!canUndo}
-                className={`p-2 rounded-lg transition-colors ${
-                  canUndo 
-                    ? 'hover:bg-gray-800 text-gray-400 hover:text-white' 
+                className={`flex items-center gap-1.5 px-3 py-1.5 transition-colors ${
+                  canUndo
+                    ? 'hover:bg-gray-800 text-gray-400 hover:text-white'
                     : 'text-gray-600 cursor-not-allowed'
                 }`}
                 title="Undo (Ctrl+Z)"
               >
                 <Undo2 className="w-4 h-4" />
+                <span className="text-sm">Undo</span>
               </button>
+              <div className="w-px h-5 bg-gray-600" />
               <button
                 onClick={handleRedo}
                 disabled={!canRedo}
-                className={`p-2 rounded-lg transition-colors ${
-                  canRedo 
-                    ? 'hover:bg-gray-800 text-gray-400 hover:text-white' 
+                className={`p-2 transition-colors ${
+                  canRedo
+                    ? 'hover:bg-gray-800 text-gray-400 hover:text-white'
                     : 'text-gray-600 cursor-not-allowed'
                 }`}
                 title="Redo (Ctrl+Y)"
@@ -1453,73 +1827,110 @@ export default function EditClipPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <Button
-              onClick={handleSave}
-              disabled={saving}
-              variant="outline"
-              className="border-gray-600 text-gray-300 hover:bg-gray-800"
-            >
-              <Save className="w-4 h-4 mr-2" />
-              {saving ? 'Saving...' : 'Save'}
-            </Button>
+          {/* Right side - Auto-save indicator and Zoom */}
+          <div className="flex items-center gap-4">
+            {/* Auto-save indicator */}
+            <div className="flex items-center gap-2 text-gray-500 text-sm">
+              {saving && <span className="animate-pulse">Saving...</span>}
+            </div>
+
+            {/* Zoom Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setZoomDropdownOpen(!zoomDropdownOpen)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-600 hover:bg-gray-800 text-gray-400 hover:text-white transition-colors text-sm"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                </svg>
+                <span>{previewZoom === 'fit' ? `Fit (${fitPercentage}%)` : `${previewZoom}%`}</span>
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path d="m6 9 6 6 6-6"/>
+                </svg>
+              </button>
+
+              {zoomDropdownOpen && (
+                <div className="absolute right-0 top-full mt-1 bg-[#1a1a2e] border border-gray-700 rounded-lg shadow-lg z-50 min-w-[140px] py-1">
+                  {[
+                    { label: 'Fit to window', value: 'fit' as const },
+                    { label: '75%', value: 75 },
+                    { label: '50%', value: 50 },
+                    { label: '33%', value: 33 },
+                    { label: '25%', value: 25 },
+                  ].map((option) => (
+                    <button
+                      key={String(option.value)}
+                      onClick={() => {
+                        setPreviewZoom(option.value)
+                        setZoomDropdownOpen(false)
+                      }}
+                      className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-800 transition-colors ${
+                        previewZoom === option.value ? 'text-purple-400' : 'text-gray-300'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
         {/* Video Preview Area - StreamLadder style with crop regions */}
-        <div 
+        <div
           ref={editorContainerRef}
-          className="flex-1 flex items-center justify-center p-4 md:p-6 overflow-hidden bg-[#0a0a14]"
+          className="flex-1 flex items-center justify-center p-4 md:p-6 overflow-auto bg-[#0a0a14]"
+          onClick={() => zoomDropdownOpen && setZoomDropdownOpen(false)}
         >
-          <div className="flex items-start gap-8">
-            {/* Main Video with Crop Regions */}
+          <div
+            className="flex items-start gap-8 transition-transform"
+            style={{
+              transform: `scale(${zoomMultiplier})`,
+              transformOrigin: 'center center',
+            }}
+          >
+            {/* Main Video with Crop Regions - Only visible when Layouts tab is active */}
+            {activeTab === 'layouts' && (
             <div className="flex flex-col gap-2">
               {/* Title header */}
               <div 
-                className="flex items-center justify-between select-none shrink-0"
+                className="flex items-center select-none shrink-0"
                 style={{ width: `${editorScale * 640}px` }}
               >
                 <span className="text-sm font-medium text-gray-400 select-none">
                   {selectedLayout ? selectedLayout.name : 'Source'}
                 </span>
-                <div className="flex items-center gap-1">
-                  <button className="p-1 hover:bg-gray-800 rounded text-gray-400 hover:text-white">
-                    <ZoomIn className="w-4 h-4" />
-                  </button>
-                  <button className="p-1 hover:bg-gray-800 rounded text-gray-400 hover:text-white">
-                    <MoreVertical className="w-4 h-4" />
-                  </button>
-                </div>
               </div>
               
               {/* Main Video Container - 16:9 aspect ratio, height = editorScale * 360px */}
               <div
                 ref={mainVideoContainerRef}
-                className="relative bg-black rounded-lg overflow-visible shadow-2xl"
+                className="relative bg-black shadow-2xl z-[100]"
                 style={{ 
                   width: `${editorScale * 640}px`,
                   height: `${editorScale * 360}px`,
                 }}
                 onClick={() => { setSelectedOverlayId(null); setSelectedCropId(null) }}
               >
-                {/* Edge indicators for selected crop touching edges - only in main video */}
-                {selectedCropId && activeTab === 'layouts' && !cropDragType?.startsWith('preview-') && (() => {
+                {/* Edge indicators for selected crop touching edges - only visible while moving */}
+                {selectedCropId && activeTab === 'layouts' && cropDragType === 'move' && (() => {
                   const crop = cropRegions.find(c => c.id === selectedCropId)
                   if (!crop) return null
                   const threshold = 0.5 // How close to edge to show indicator
                   return (
                     <>
                       {crop.x <= threshold && (
-                        <div className="absolute left-0 top-0 bottom-0 w-[1px] bg-purple-400 z-[20]" />
+                        <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-purple-400 z-[20] pointer-events-none" />
                       )}
                       {crop.x + crop.width >= 100 - threshold && (
-                        <div className="absolute right-0 top-0 bottom-0 w-[1px] bg-purple-400 z-[20]" />
+                        <div className="absolute right-0 top-0 bottom-0 w-[2px] bg-purple-400 z-[20] pointer-events-none" />
                       )}
                       {crop.y <= threshold && (
-                        <div className="absolute top-0 left-0 right-0 h-[1px] bg-purple-400 z-[20]" />
+                        <div className="absolute top-0 left-0 right-0 h-[2px] bg-purple-400 z-[20] pointer-events-none" />
                       )}
                       {crop.y + crop.height >= 100 - threshold && (
-                        <div className="absolute bottom-0 left-0 right-0 h-[1px] bg-purple-400 z-[20]" />
+                        <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-purple-400 z-[20] pointer-events-none" />
                       )}
                     </>
                   )
@@ -1539,48 +1950,54 @@ export default function EditClipPage() {
                     src={clip.signedUrl || ''}
                     ref={(el) => { if (el) setVideoRef(el) }}
                     className="w-full h-full object-contain rounded-lg"
-                    style={{
-                      transform: `scale(${currentZoom.scale})`,
-                      transformOrigin: `${currentZoom.x}% ${currentZoom.y}%`
-                    }}
                   />
                   
                   {/* Dark overlay showing areas outside crop regions */}
                   {activeTab === 'layouts' && cropRegions.length > 0 && (
                     <svg 
-                      className="absolute inset-0 w-full h-full pointer-events-none z-[25]"
+                      className="absolute inset-0 w-full h-full pointer-events-none z-[24]"
+                      viewBox="0 0 100 100"
                       preserveAspectRatio="none"
                     >
                       <defs>
                         <mask id="cropMask">
-                          {/* White = visible (dark), Black = hidden (clear) */}
-                          <rect x="0" y="0" width="100%" height="100%" fill="white" />
-                          {cropRegions.map((crop) => (
-                            <rect
-                              key={crop.id}
-                              x={`${crop.x}%`}
-                              y={`${crop.y}%`}
-                              width={`${crop.width}%`}
-                              height={`${crop.height}%`}
-                              fill="black"
-                              rx={crop.cornerRounding ? `${crop.cornerRounding}%` : '0'}
-                            />
-                          ))}
+                          {/* White = visible (dark overlay), Black = hidden (clear/crop area) */}
+                          <rect x="0" y="0" width="100" height="100" fill="white" />
+                          {cropRegions.map((crop) => {
+                            // Calculate rx as percentage of crop width, ry as percentage of crop height
+                            const cornerRounding = crop.cornerRounding || 0
+                            const rx = (cornerRounding / 100) * crop.width
+                            const ry = (cornerRounding / 100) * crop.height
+                            return (
+                              <rect
+                                key={crop.id}
+                                x={crop.x}
+                                y={crop.y}
+                                width={crop.width}
+                                height={crop.height}
+                                fill="black"
+                                rx={rx}
+                                ry={ry}
+                              />
+                            )
+                          })}
                         </mask>
                       </defs>
                       <rect 
                         x="0" 
                         y="0" 
-                        width="100%" 
-                        height="100%" 
+                        width="100" 
+                        height="100" 
                         fill="rgba(0, 0, 0, 0.5)" 
                         mask="url(#cropMask)"
                       />
                     </svg>
                   )}
 
-                {/* Crop Regions Overlay */}
-                {activeTab === 'layouts' && cropRegions.map((crop) => {
+                {/* Crop Regions Overlay - sorted by zIndex */}
+                {activeTab === 'layouts' && [...cropRegions]
+                  .sort((a, b) => (a.zIndex || 1) - (b.zIndex || 1))
+                  .map((crop) => {
                   const isSelected = selectedCropId === crop.id
                   const isHovered = hoveredCropId === crop.id
                   const cornerRounding = crop.cornerRounding || 0
@@ -1597,10 +2014,10 @@ export default function EditClipPage() {
                           height: `${crop.height}%`,
                           border: `2px solid ${crop.color}`,
                           backgroundColor: 'transparent',
-                          zIndex: 30 + (crop.zIndex || 1),
+                          zIndex: 10 + (crop.zIndex || 1), // BASE LAYERS: 10-49 for crops
                           borderRadius: borderRadius,
                         }}
-                        onClick={(e) => { e.stopPropagation(); setSelectedCropId(crop.id) }}
+                        onClick={(e) => { e.stopPropagation(); setSelectedCropId(crop.id); setSelectedOverlayId(null) }}
                         onMouseDown={(e) => handleCropMouseDown(e, crop.id, 'move')}
                         onMouseEnter={() => setHoveredCropId(crop.id)}
                         onMouseLeave={() => setHoveredCropId(null)}
@@ -1649,7 +2066,7 @@ export default function EditClipPage() {
                             top: `${crop.y + crop.height}%`,
                             transform: 'translate(-50%, 8px)',
                             transformOrigin: 'top center',
-                            zIndex: 150,
+                            zIndex: 200,
                           }}
                           onClick={(e) => e.stopPropagation()}
                         >
@@ -1668,82 +2085,13 @@ export default function EditClipPage() {
                     </React.Fragment>
                   )
                 })}
-
-                {/* Overlays on video (for non-layouts tabs) */}
-                {activeTab !== 'layouts' && overlays
-                  .filter(o => currentTime >= o.startTime && currentTime <= o.endTime)
-                  .map(overlay => {
-                    const isSelected = selectedOverlayId === overlay.id
-                    return (
-                      <div
-                        key={overlay.id}
-                        style={{
-                          position: 'absolute',
-                          left: `${(overlay.videoLeft / 640) * 100}%`,
-                          top: `${(overlay.videoTop / 360) * 100}%`,
-                          width: `${(overlay.videoWidth / 640) * 100}%`,
-                          height: `${(overlay.videoHeight / 360) * 100}%`,
-                          backgroundColor: overlay.backgroundColor || 'transparent',
-                          border: isSelected ? '2px solid #8b5cf6' : '1px solid rgba(255,255,255,0.2)',
-                          borderRadius: overlay.borderRadius || 4,
-                          opacity: overlay.opacity ?? 1,
-                          transform: overlay.rotation ? `rotate(${overlay.rotation}deg)` : undefined,
-                          cursor: dragOverlayId === overlay.id ? 'grabbing' : 'grab',
-                          zIndex: isSelected ? 20 : 10,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: overlay.textAlign || 'center',
-                          overflow: 'hidden',
-                          userSelect: 'none',
-                        }}
-                        onMouseDown={(e) => { e.stopPropagation(); handleOverlayMouseDown(e, overlay.id, 'move') }}
-                        onMouseMove={handleOverlayMouseMove}
-                        onMouseUp={handleOverlayMouseUp}
-                      >
-                        {(overlay.type === 'text' || overlay.type === 'caption' || overlay.type === 'sticker') ? (
-                          <span
-                            style={{
-                              fontSize: overlay.fontSize || 16,
-                              fontFamily: overlay.fontFamily,
-                              fontWeight: overlay.fontWeight as React.CSSProperties['fontWeight'],
-                              fontStyle: overlay.fontStyle,
-                              color: overlay.color || '#fff',
-                              textAlign: overlay.textAlign || 'center',
-                              WebkitTextStroke: overlay.textStroke,
-                              textShadow: overlay.textShadow,
-                              width: '100%',
-                              padding: '4px 8px',
-                              pointerEvents: 'none',
-                            }}
-                          >
-                            {overlay.content}
-                          </span>
-                        ) : (
-                          <img
-                            src={overlay.src}
-                            alt=""
-                            className="w-full h-full object-contain"
-                            draggable={false}
-                          />
-                        )}
-
-                        {/* Resize Handle */}
-                        {isSelected && (
-                          <div
-                            className="absolute bottom-0 right-0 w-4 h-4 bg-purple-500 cursor-se-resize rounded-tl"
-                            onMouseDown={(e) => { e.stopPropagation(); handleOverlayMouseDown(e, overlay.id, 'resize') }}
-                          />
-                        )}
-                      </div>
-                    )
-                  })}
                 </div>
               </div>
 
               {/* Crop Controls - Below Video */}
               {activeTab === 'layouts' && (
                 <div 
-                  className="flex items-center gap-4 shrink-0"
+                  className="flex items-center gap-4 shrink-0 relative z-0"
                   style={{ width: `${editorScale * 640}px` }}
                 >
                   <button
@@ -1768,46 +2116,38 @@ export default function EditClipPage() {
                 </div>
               )}
             </div>
+            )}
 
             {/* Preview Panel - Right side of video */}
             <div className="flex flex-col gap-2">
               {/* Preview header */}
-              <div 
-                className="flex items-center justify-between select-none shrink-0"
-                style={{ width: `${editorScale * 202.5}px` }}
+              <div
+                className="flex items-center select-none shrink-0"
+                style={{ width: `${currentScale * 202.5}px` }}
               >
                 <span className="text-sm font-medium text-gray-400 select-none">Preview</span>
-                <div className="flex items-center gap-1">
-                  <button className="p-1 hover:bg-gray-800 rounded text-gray-400 hover:text-white">
-                    <ZoomIn className="w-4 h-4" />
-                  </button>
-                  <button className="p-1 hover:bg-gray-800 rounded text-gray-400 hover:text-white">
-                    <Camera className="w-4 h-4" />
-                  </button>
-                  <button className="p-1 hover:bg-gray-800 rounded text-gray-400 hover:text-white">
-                    <MoreVertical className="w-4 h-4" />
-                  </button>
-                </div>
               </div>
 
               {/* Platform Preview - 9:16 aspect ratio, same height as source video */}
-              <div 
+              <div
                 ref={previewContainerRef}
                 className="relative bg-black border border-gray-700 overflow-hidden"
-                style={{ 
-                  width: `${editorScale * 202.5}px`,
-                  height: `${editorScale * 360}px`,
+                style={{
+                  width: `${currentScale * 202.5}px`,
+                  height: `${currentScale * 360}px`,
                 }}
               >
                 {/* Blurred video background */}
                 {clip?.signedUrl && (
-                  <video
-                    ref={previewBgVideoRef}
-                    src={clip.signedUrl}
-                    className="absolute inset-0 w-full h-full object-cover blur-lg scale-110 opacity-50"
-                    muted
-                    playsInline
-                  />
+                  <div className="absolute inset-0 overflow-hidden">
+                    <video
+                      ref={previewBgVideoRef}
+                      src={clip.signedUrl}
+                      className="absolute inset-0 w-full h-full object-cover blur-md scale-105 opacity-60"
+                      muted
+                      playsInline
+                    />
+                  </div>
                 )}
                 
                 {/* Edge indicators for preview slot touching edges - only when dragging in preview */}
@@ -1874,13 +2214,23 @@ export default function EditClipPage() {
                   <div className="absolute top-1/2 left-0 right-0 h-[1px] bg-purple-500 z-[60] pointer-events-none" style={{ transform: 'translateY(-0.5px)' }} />
                 )}
                 
-                {/* Preview showing cropped content */}
-                <div className="w-full h-full relative">
-                  {cropRegions.map((crop) => {
-                    // Container dimensions are based on editorScale
+                {/* Preview showing cropped content - sorted by zIndex */}
+                {/* Effect transform wrapper - applies shake/zoom effects to all content */}
+                <div
+                  className="w-full h-full relative"
+                  style={{
+                    transform: effectTransform.transform || undefined,
+                    filter: effectTransform.filter || undefined,
+                    transformOrigin: 'center center',
+                  }}
+                >
+                  {[...cropRegions]
+                    .sort((a, b) => (a.zIndex || 1) - (b.zIndex || 1))
+                    .map((crop) => {
+                    // Container dimensions are based on currentScale
                     // Preview is 9:16 aspect, so width = 202.5 * scale, height = 360 * scale
-                    const containerWidth = editorScale * 202.5
-                    const containerHeight = editorScale * 360
+                    const containerWidth = currentScale * 202.5
+                    const containerHeight = currentScale * 360
                     
                     return (
                       <PreviewCropRegion
@@ -1894,65 +2244,712 @@ export default function EditClipPage() {
                         onMouseDown={handlePreviewCropMouseDown}
                         containerWidth={containerWidth}
                         containerHeight={containerHeight}
+                        mainVideoRef={videoRef}
+                        playing={playing}
                       />
                     )
                   })}
 
-                  {/* Preview overlays */}
+                  {/* Zoom Overlay - covers entire preview when zoom is active (scale > 1) */}
+                  {currentZoom.scale > 1 && (
+                    <ZoomOverlay
+                      videoSrc={clip.signedUrl || ''}
+                      zoom={currentZoom}
+                      containerWidth={currentScale * 202.5}
+                      containerHeight={currentScale * 360}
+                      mainVideoRef={videoRef}
+                      playing={playing}
+                    />
+                  )}
+
+                  {/* Visual Effects Overlay */}
+                  <EffectOverlay
+                    effects={visualEffects}
+                    currentTime={currentTime}
+                    containerWidth={currentScale * 202.5}
+                    containerHeight={currentScale * 360}
+                  />
+
+                  {/* Preview overlays - CONTENT LAYERS: 100-119 based on timeline row */}
                   {overlays
                     .filter(o => currentTime >= o.startTime && currentTime <= o.endTime)
-                    .map(overlay => (
-                      <div
-                        key={overlay.id}
-                        className="absolute"
-                        style={{
-                          left: `${(overlay.videoLeft / 640) * 100}%`,
-                          bottom: '10%',
-                          transform: 'translateX(-50%)',
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: (overlay.fontSize || 16) * 0.5,
-                            fontFamily: overlay.fontFamily,
-                            fontWeight: overlay.fontWeight as React.CSSProperties['fontWeight'],
-                            color: overlay.color || '#fff',
-                            textShadow: overlay.textShadow,
-                          }}
-                        >
-                          {overlay.content}
-                        </span>
-                      </div>
-                    ))}
+                    .map(overlay => {
+                      const isSelected = selectedOverlayId === overlay.id
+                      return (
+                        <React.Fragment key={overlay.id}>
+                          <div
+                            className="absolute"
+                            style={{
+                              left: `${overlay.videoLeft}%`,
+                              top: `${overlay.videoTop}%`,
+                              width: (overlay.type === 'text' || overlay.type === 'caption') ? 'auto' : `${overlay.videoWidth}%`,
+                              minWidth: (overlay.type === 'text' || overlay.type === 'caption') ? `${overlay.videoWidth}%` : undefined,
+                              minHeight: `${overlay.videoHeight}%`,
+                              backgroundColor: overlay.type === 'text' || overlay.type === 'caption' ? (overlay.backgroundColor || 'transparent') : 'transparent',
+                              border: isSelected && activeTab !== 'layouts' ? '2px solid #8b5cf6' : '1px solid transparent',
+                              borderRadius: overlay.borderRadius || 0,
+                              opacity: (overlay.opacity ?? 100) / 100,
+                              transform: overlay.rotation ? `rotate(${overlay.rotation}deg)` : undefined,
+                              cursor: activeTab === 'layouts' ? 'default' : (dragOverlayId === overlay.id ? 'grabbing' : 'grab'),
+                              pointerEvents: activeTab === 'layouts' ? 'none' : 'auto',
+                              zIndex: 100 + (overlay.zIndex || overlay.row || 0),
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: overlay.textAlign || 'center',
+                              overflow: 'visible',
+                              userSelect: 'none',
+                              padding: overlay.type === 'text' || overlay.type === 'caption' ? '4px' : undefined,
+                            }}
+                            onMouseDown={(e) => {
+                              // Don't allow element interaction on Layouts tab
+                              if (activeTab === 'layouts') return
+                              e.stopPropagation()
+                              // Select and start moving immediately on any click
+                              // Also deselect any selected crop for single selection
+                              setSelectedOverlayId(overlay.id)
+                              setSelectedCropId(null)
+                              handleOverlayMouseDown(e, overlay.id, 'move')
+                            }}
+                          >
+                            {overlay.type === 'image' && (
+                              <img
+                                src={overlay.src}
+                                alt=""
+                                className="w-full h-full object-contain pointer-events-none select-none"
+                                draggable={false}
+                              />
+                            )}
+                            {overlay.type === 'social-sticker' && (
+                              <div className="w-full h-full flex items-center justify-center pointer-events-none select-none">
+                                <StickerRenderer
+                                  config={{
+                                    id: overlay.id,
+                                    template: (overlay.stickerTemplate || 'basic') as StickerTemplate,
+                                    platform: (overlay.socialPlatforms?.[0] || 'twitch') as SocialPlatform,
+                                    platforms: overlay.socialPlatforms,
+                                    username: overlay.content || 'Username',
+                                    style: (overlay.stickerStyle || 'default') as StickerStyle,
+                                    animated: overlay.stickerAnimated,
+                                    animation: overlay.stickerAnimation,
+                                    showFollowLabel: overlay.stickerTemplate === 'follow',
+                                  }}
+                                  isPreview={false}
+                                />
+                              </div>
+                            )}
+                            {(overlay.type === 'text' || overlay.type === 'caption') && (
+                              <span
+                                className="select-none"
+                                style={{
+                                  // Scale font size with element size (base 16px at 15% height, scale proportionally)
+                                  fontSize: `${(overlay.videoHeight / 15) * (overlay.fontSize || 16)}px`,
+                                  fontFamily: overlay.textStyle?.fontFamily || overlay.fontFamily || 'Inter',
+                                  fontWeight: overlay.fontWeight as React.CSSProperties['fontWeight'] || 'bold',
+                                  fontStyle: overlay.fontStyle,
+                                  lineHeight: 1.3,
+                                  // Use background for gradient text only (not backgroundColor to avoid conflicts)
+                                  background: overlay.textStyle?.fill?.type === 'gradient' && overlay.textStyle.fill.gradient
+                                    ? overlay.textStyle.fill.gradient.type === 'radial'
+                                      ? `radial-gradient(circle, ${overlay.textStyle.fill.gradient.stops.map(s => `${s.color} ${s.position}%`).join(', ')})`
+                                      : `linear-gradient(${overlay.textStyle.fill.gradient.angle || 0}deg, ${overlay.textStyle.fill.gradient.stops.map(s => `${s.color} ${s.position}%`).join(', ')})`
+                                    : undefined,
+                                  backgroundClip: overlay.textStyle?.fill?.type === 'gradient' ? 'text' : undefined,
+                                  WebkitBackgroundClip: overlay.textStyle?.fill?.type === 'gradient' ? 'text' : undefined,
+                                  WebkitTextFillColor: overlay.textStyle?.fill?.type === 'gradient' ? 'transparent' : undefined,
+                                  color: overlay.textStyle?.fill?.type === 'gradient'
+                                    ? 'transparent'
+                                    : (overlay.textStyle?.fill?.type === 'solid' ? overlay.textStyle.fill.color : (overlay.color || '#fff')),
+                                  textAlign: overlay.textAlign || 'center',
+                                  // Use paint-order to make stroke expand outwards instead of inwards
+                                  paintOrder: overlay.textStyle?.outline ? 'stroke fill' : undefined,
+                                  WebkitTextStroke: overlay.textStyle?.outline
+                                    ? `${overlay.textStyle.outline.width * 2}px ${overlay.textStyle.outline.color}`
+                                    : overlay.textStroke,
+                                  textShadow: overlay.textStyle?.glow
+                                    ? `0 0 ${overlay.textStyle.glow.strength}px ${overlay.textStyle.glow.color}`
+                                    : overlay.textStyle?.shadow
+                                      ? `${overlay.textStyle.shadow.x}px ${overlay.textStyle.shadow.y}px ${overlay.textStyle.shadow.blur}px ${overlay.textStyle.shadow.color}`
+                                      : overlay.textShadow,
+                                  borderRadius: overlay.textStyle?.background?.radius || 0,
+                                  display: 'inline-block',
+                                  padding: '8px 16px',
+                                  pointerEvents: 'none',
+                                  whiteSpace: 'pre',
+                                }}
+                              >
+                                {/* Inner span for text background (separate from gradient text) */}
+                                {overlay.textStyle?.background && overlay.textStyle.fill?.type !== 'gradient' ? (
+                                  <span
+                                    style={{
+                                      backgroundColor: `rgba(${parseInt(overlay.textStyle.background.color.slice(1,3), 16)}, ${parseInt(overlay.textStyle.background.color.slice(3,5), 16)}, ${parseInt(overlay.textStyle.background.color.slice(5,7), 16)}, ${(overlay.textStyle.background.opacity || 100) / 100})`,
+                                      borderRadius: overlay.textStyle.background.radius || 0,
+                                      padding: '4px 8px',
+                                    }}
+                                  >
+                                    {overlay.content}
+                                  </span>
+                                ) : overlay.content}
+                              </span>
+                            )}
+                            {overlay.type === 'reaction' && (
+                              <div className="w-full h-full flex items-center justify-center pointer-events-none select-none">
+                                {/* Twitch Reaction */}
+                                {overlay.reactionPlatform === 'twitch' && (
+                                  <div
+                                    className="flex items-start gap-2 p-2 rounded-md w-full"
+                                    style={{
+                                      backgroundColor: overlay.reactionDarkMode ? '#18181b' : '#ffffff',
+                                      color: overlay.reactionDarkMode ? '#efeff1' : '#0e0e10',
+                                    }}
+                                  >
+                                    <div
+                                      className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-white text-xs font-bold"
+                                      style={{ backgroundColor: '#9146ff' }}
+                                    >
+                                      {(overlay.reactionUsername || 'U')[0].toUpperCase()}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <span className="font-semibold text-sm" style={{ color: '#9146ff' }}>
+                                        {overlay.reactionUsername || 'Username'}
+                                      </span>
+                                      <span className="text-sm ml-1" style={{ color: overlay.reactionDarkMode ? '#efeff1' : '#0e0e10' }}>
+                                        {overlay.reactionMessage || 'Message'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )}
+                                {/* TikTok Reaction */}
+                                {overlay.reactionPlatform === 'tiktok' && (
+                                  <div
+                                    className="flex items-start gap-2 p-2 rounded-md w-full"
+                                    style={{
+                                      backgroundColor: overlay.reactionDarkMode ? '#121212' : '#ffffff',
+                                      color: overlay.reactionDarkMode ? '#ffffff' : '#161823',
+                                    }}
+                                  >
+                                    <div
+                                      className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-white text-xs font-bold"
+                                      style={{ background: 'linear-gradient(135deg, #25f4ee, #fe2c55)' }}
+                                    >
+                                      {(overlay.reactionUsername || 'U')[0].toUpperCase()}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="font-semibold text-sm" style={{ color: overlay.reactionDarkMode ? '#ffffff' : '#161823' }}>
+                                        {overlay.reactionUsername || 'Username'}
+                                      </div>
+                                      <div className="text-sm" style={{ color: overlay.reactionDarkMode ? 'rgba(255,255,255,0.75)' : 'rgba(22,24,35,0.75)' }}>
+                                        {overlay.reactionMessage || 'Message'}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                                {/* Instagram Reaction */}
+                                {overlay.reactionPlatform === 'instagram' && (
+                                  <div
+                                    className="flex items-start gap-2 p-2 rounded-md w-full"
+                                    style={{
+                                      backgroundColor: overlay.reactionDarkMode ? '#000000' : '#ffffff',
+                                      color: overlay.reactionDarkMode ? '#ffffff' : '#262626',
+                                    }}
+                                  >
+                                    <div
+                                      className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-white text-xs font-bold"
+                                      style={{ background: 'linear-gradient(135deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888)' }}
+                                    >
+                                      {(overlay.reactionUsername || 'U')[0].toUpperCase()}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <span className="font-semibold text-sm" style={{ color: overlay.reactionDarkMode ? '#ffffff' : '#262626' }}>
+                                        {overlay.reactionUsername || 'Username'}
+                                      </span>
+                                      <span className="text-sm ml-1" style={{ color: overlay.reactionDarkMode ? '#ffffff' : '#262626' }}>
+                                        {overlay.reactionMessage || 'Message'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )}
+                                {/* Twitter/X Reaction */}
+                                {overlay.reactionPlatform === 'twitter' && (
+                                  <div
+                                    className="flex items-start gap-2 p-2 rounded-md w-full"
+                                    style={{
+                                      backgroundColor: overlay.reactionDarkMode ? '#000000' : '#ffffff',
+                                      color: overlay.reactionDarkMode ? '#e7e9ea' : '#0f1419',
+                                    }}
+                                  >
+                                    <div
+                                      className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-white text-xs font-bold"
+                                      style={{ backgroundColor: '#1d9bf0' }}
+                                    >
+                                      {(overlay.reactionUsername || 'U')[0].toUpperCase()}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-1">
+                                        <span className="font-bold text-sm" style={{ color: overlay.reactionDarkMode ? '#e7e9ea' : '#0f1419' }}>
+                                          {overlay.reactionUsername || 'Username'}
+                                        </span>
+                                        <span className="text-sm" style={{ color: overlay.reactionDarkMode ? '#71767b' : '#536471' }}>
+                                          @{(overlay.reactionUsername || 'username').toLowerCase().replace(/\s/g, '')}
+                                        </span>
+                                      </div>
+                                      <div className="text-sm" style={{ color: overlay.reactionDarkMode ? '#e7e9ea' : '#0f1419' }}>
+                                        {overlay.reactionMessage || 'Message'}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Corner Resize Handles - hidden on Layouts tab */}
+                            {isSelected && activeTab !== 'layouts' && (
+                              <>
+                                <div
+                                  className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-white border-2 border-purple-500 rounded-full cursor-se-resize"
+                                  onMouseDown={(e) => { e.stopPropagation(); handleOverlayMouseDown(e, overlay.id, 'resize') }}
+                                />
+                                <div
+                                  className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-white border-2 border-purple-500 rounded-full cursor-ne-resize"
+                                  onMouseDown={(e) => { e.stopPropagation(); handleOverlayMouseDown(e, overlay.id, 'resize-tr') }}
+                                />
+                                <div
+                                  className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white border-2 border-purple-500 rounded-full cursor-sw-resize"
+                                  onMouseDown={(e) => { e.stopPropagation(); handleOverlayMouseDown(e, overlay.id, 'resize-bl') }}
+                                />
+                                <div
+                                  className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white border-2 border-purple-500 rounded-full cursor-nw-resize"
+                                  onMouseDown={(e) => { e.stopPropagation(); handleOverlayMouseDown(e, overlay.id, 'resize-tl') }}
+                                />
+                              </>
+                            )}
+                          </div>
+
+                          {/* Element Menu - appears below selected element, centered */}
+                          {isSelected && activeTab !== 'layouts' && (
+                            <div
+                              className="absolute"
+                              style={{
+                                left: `${overlay.videoLeft + overlay.videoWidth / 2}%`,
+                                top: `${overlay.videoTop + overlay.videoHeight}%`,
+                                transform: 'translate(-50%, 8px)',
+                                transformOrigin: 'top center',
+                                zIndex: 300,
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div className="flex items-center gap-1 p-1 bg-gray-900/90 backdrop-blur-sm rounded-lg border border-gray-700 shadow-lg">
+                                {/* Opacity */}
+                                <div className="relative group">
+                                  <button
+                                    className="p-1.5 hover:bg-gray-700 rounded transition-colors"
+                                    title="Opacity"
+                                  >
+                                    <svg className="w-4 h-4 text-gray-300" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                                      <circle cx="12" cy="12" r="10" opacity="0.3" />
+                                      <circle cx="12" cy="12" r="6" />
+                                    </svg>
+                                  </button>
+                                  {/* Opacity slider dropdown */}
+                                  <div className="absolute bottom-full left-0 mb-1 p-2 bg-gray-900/95 backdrop-blur-sm rounded-lg border border-gray-700 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto transition-opacity">
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        type="range"
+                                        min="0"
+                                        max="100"
+                                        value={overlay.opacity ?? 100}
+                                        onChange={(e) => handleUpdateOverlay(overlay.id, { opacity: parseInt(e.target.value) })}
+                                        className="w-20 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                                      />
+                                      <span className="text-xs text-gray-400 w-8">{overlay.opacity ?? 100}%</span>
+                                    </div>
+                                  </div>
+                                </div>
+                                {/* Edit - switch to Elements tab to edit this element */}
+                                <button
+                                  onClick={() => {
+                                    setRequestElementEditView(true)
+                                    setActiveTab('elements')
+                                  }}
+                                  className="p-1.5 hover:bg-gray-700 rounded transition-colors"
+                                  title="Edit element"
+                                >
+                                  <Pencil className="w-4 h-4 text-gray-300" />
+                                </button>
+                                {/* Bring to front */}
+                                <button
+                                  onClick={() => {
+                                    const maxZ = Math.max(...overlays.map(o => o.zIndex || 0))
+                                    handleUpdateOverlay(overlay.id, { zIndex: maxZ + 1 })
+                                  }}
+                                  className="p-1.5 hover:bg-gray-700 rounded transition-colors"
+                                  title="Bring to front"
+                                >
+                                  <Layers className="w-4 h-4 text-gray-300" />
+                                </button>
+                                {/* Duplicate */}
+                                <button
+                                  onClick={() => handleDuplicateOverlay(overlay)}
+                                  className="p-1.5 hover:bg-gray-700 rounded transition-colors"
+                                  title="Duplicate"
+                                >
+                                  <svg className="w-4 h-4 text-gray-300" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                                  </svg>
+                                </button>
+                                {/* Delete */}
+                                <button
+                                  onClick={() => handleDeleteOverlay(overlay.id)}
+                                  className="p-1.5 hover:bg-red-600/30 rounded transition-colors"
+                                  title="Delete"
+                                >
+                                  <Trash2 className="w-4 h-4 text-red-400" />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </React.Fragment>
+                      )
+                    })}
                 </div>
 
-                {/* Platform UI overlay elements */}
-                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex flex-col gap-3 pointer-events-none">
-                  <div className="w-8 h-8 rounded-full bg-gray-800/80 flex items-center justify-center">
-                    <span className="text-white text-xs">👍</span>
+                {/* Platform UI overlay elements - z-index 200-249, scaled to fit small preview */}
+                {previewPlatform !== 'none' && (
+                  <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ zIndex: 200 }}>
+                    {/* YouTube Shorts UI */}
+                    {previewPlatform === 'youtube' && (
+                      <>
+                        {/* Top left - back arrow */}
+                        <div className="absolute top-2 left-1.5">
+                          <svg className="w-4 h-4 text-white drop-shadow-lg" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                            <path d="M15 19l-7-7 7-7"/>
+                          </svg>
+                        </div>
+                        {/* Top right - search, camera, more */}
+                        <div className="absolute top-2 right-1.5 flex items-center gap-2">
+                          <svg className="w-4 h-4 text-white drop-shadow-lg" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                          </svg>
+                          <svg className="w-4 h-4 text-white drop-shadow-lg" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                            <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/><circle cx="17" cy="7" r="1"/>
+                          </svg>
+                          <svg className="w-4 h-4 text-white drop-shadow-lg" fill="currentColor" viewBox="0 0 24 24">
+                            <circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/>
+                          </svg>
+                        </div>
+                        {/* Right side action buttons */}
+                        <div className="absolute right-1.5 bottom-12 flex flex-col items-center gap-3">
+                          {/* Like */}
+                          <div className="flex flex-col items-center">
+                            <div className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
+                              <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/>
+                              </svg>
+                            </div>
+                            <span className="text-white text-[8px] font-medium drop-shadow-lg mt-0.5">1.1 min</span>
+                          </div>
+                          {/* Dislike */}
+                          <div className="flex flex-col items-center">
+                            <div className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
+                              <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/>
+                              </svg>
+                            </div>
+                            <span className="text-white text-[8px] font-medium drop-shadow-lg mt-0.5">Dislike</span>
+                          </div>
+                          {/* Comments */}
+                          <div className="flex flex-col items-center">
+                            <div className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
+                              <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1zm-4 6V3c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h10c.55 0 1-.45 1-1z"/>
+                              </svg>
+                            </div>
+                            <span className="text-white text-[8px] font-medium drop-shadow-lg mt-0.5">6969</span>
+                          </div>
+                          {/* Share */}
+                          <div className="flex flex-col items-center">
+                            <div className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
+                              <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M21 12l-7-7v4C7 10 4 15 3 20c2.5-3.5 6-5.1 11-5.1V19l7-7z"/>
+                              </svg>
+                            </div>
+                            <span className="text-white text-[8px] font-medium drop-shadow-lg mt-0.5">Share</span>
+                          </div>
+                          {/* Remix */}
+                          <div className="flex flex-col items-center">
+                            <div className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
+                              <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M7 2v11h3v9l7-12h-4l4-8z"/>
+                              </svg>
+                            </div>
+                            <span className="text-white text-[8px] font-medium drop-shadow-lg mt-0.5">Remix</span>
+                          </div>
+                        </div>
+                        {/* Bottom info */}
+                        <div className="absolute bottom-2 left-1.5 right-10">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <div className="w-6 h-6 rounded-full bg-purple-600 flex items-center justify-center">
+                              <span className="text-white text-[8px] font-bold">U</span>
+                            </div>
+                            <span className="text-white text-[9px] font-medium drop-shadow-lg">@StreamLadder</span>
+                            <span className="px-1.5 py-0.5 bg-white rounded text-[7px] font-semibold text-black">Subscribe</span>
+                          </div>
+                          <p className="text-white text-[8px] leading-tight drop-shadow-lg mb-1">You should subscribe to us #now #ok</p>
+                          <div className="flex items-center gap-1">
+                            <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+                            </svg>
+                            <span className="text-white text-[7px] drop-shadow-lg">Darude - @SandStorm</span>
+                          </div>
+                        </div>
+                        {/* Bottom progress */}
+                        <div className="absolute bottom-1 left-1.5 flex items-center gap-1">
+                          <div className="w-4 h-4 rounded bg-white/20 flex items-center justify-center">
+                            <span className="text-white text-[6px] font-bold">100</span>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {/* TikTok UI */}
+                    {previewPlatform === 'tiktok' && (
+                      <>
+                        {/* Top bar */}
+                        <div className="absolute top-2 left-0 right-0 flex items-center justify-between px-2">
+                          {/* Live indicator */}
+                          <div className="flex items-center gap-1">
+                            <div className="px-1 py-0.5 bg-pink-500 rounded text-[6px] text-white font-bold">LIVE</div>
+                          </div>
+                          {/* Center tabs */}
+                          <div className="flex items-center gap-2">
+                            <span className="text-white/60 text-[8px] font-medium">Following</span>
+                            <span className="text-white text-[8px] font-bold border-b border-white pb-0.5">For you</span>
+                          </div>
+                          {/* Right icons */}
+                          <div className="flex items-center gap-1.5">
+                            <div className="px-1 py-0.5 bg-pink-500 rounded text-[6px] text-white font-bold">LIVE</div>
+                            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                            </svg>
+                          </div>
+                        </div>
+                        {/* Right side action buttons */}
+                        <div className="absolute right-1.5 bottom-10 flex flex-col items-center gap-2.5">
+                          {/* Profile */}
+                          <div className="flex flex-col items-center">
+                            <div className="w-8 h-8 rounded-full border-2 border-white overflow-hidden bg-gradient-to-br from-pink-500 to-purple-600">
+                              <div className="w-full h-full flex items-center justify-center">
+                                <span className="text-white text-[9px] font-bold">U</span>
+                              </div>
+                            </div>
+                            <div className="w-4 h-4 -mt-2 rounded-full bg-[#fe2c55] flex items-center justify-center border border-white">
+                              <span className="text-white text-[10px] font-bold">+</span>
+                            </div>
+                          </div>
+                          {/* Like */}
+                          <div className="flex flex-col items-center">
+                            <svg className="w-6 h-6 text-white drop-shadow-lg" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                            </svg>
+                            <span className="text-white text-[8px] font-semibold drop-shadow-lg">250.5K</span>
+                          </div>
+                          {/* Comment */}
+                          <div className="flex flex-col items-center">
+                            <svg className="w-6 h-6 text-white drop-shadow-lg" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1zm-4 6V3c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h10c.55 0 1-.45 1-1z"/>
+                            </svg>
+                            <span className="text-white text-[8px] font-semibold drop-shadow-lg">100K</span>
+                          </div>
+                          {/* Bookmark */}
+                          <div className="flex flex-col items-center">
+                            <svg className="w-6 h-6 text-white drop-shadow-lg" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M17 3H7c-1.1 0-2 .9-2 2v16l7-3 7 3V5c0-1.1-.9-2-2-2z"/>
+                            </svg>
+                          </div>
+                          {/* Share */}
+                          <div className="flex flex-col items-center">
+                            <svg className="w-6 h-6 text-white drop-shadow-lg" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M21 12l-7-7v4C7 10 4 15 3 20c2.5-3.5 6-5.1 11-5.1V19l7-7z"/>
+                            </svg>
+                            <span className="text-white text-[8px] font-semibold drop-shadow-lg">89K</span>
+                          </div>
+                          {/* Music disc */}
+                          <div className="w-7 h-7 rounded-lg bg-gray-800 border border-gray-600 overflow-hidden animate-pulse">
+                            <div className="w-full h-full bg-gradient-to-br from-pink-500 to-purple-500" />
+                          </div>
+                        </div>
+                        {/* Bottom info */}
+                        <div className="absolute bottom-2 left-1.5 right-10">
+                          <span className="text-white text-[10px] font-bold drop-shadow-lg">StreamLadder</span>
+                          <p className="text-white text-[8px] leading-tight drop-shadow-lg mt-0.5">Use me every day 📱</p>
+                          <p className="text-cyan-300 text-[8px] leading-tight drop-shadow-lg">#fyp #streamladder #loveyou</p>
+                          <p className="text-white/70 text-[7px] mt-0.5">▶ Show translation</p>
+                          <div className="flex items-center gap-1 mt-1">
+                            <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+                            </svg>
+                            <span className="text-white text-[7px] drop-shadow-lg">Darude - @SandStorm</span>
+                            <span className="text-white/70 text-[7px] ml-auto">132.5K</span>
+                          </div>
+                        </div>
+                        {/* Bottom progress */}
+                        <div className="absolute bottom-1 left-1.5 flex items-center gap-1">
+                          <div className="w-4 h-4 rounded bg-white/20 flex items-center justify-center">
+                            <span className="text-white text-[6px] font-bold">100</span>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {/* Instagram Reels UI */}
+                    {previewPlatform === 'instagram' && (
+                      <>
+                        {/* Top bar */}
+                        <div className="absolute top-2 left-0 right-0 flex items-center justify-between px-2">
+                          {/* Back arrow */}
+                          <svg className="w-5 h-5 text-white drop-shadow-lg" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                            <path d="M15 19l-7-7 7-7"/>
+                          </svg>
+                          {/* Reels text */}
+                          <span className="text-white text-[10px] font-semibold drop-shadow-lg">Reels</span>
+                          {/* Camera */}
+                          <svg className="w-5 h-5 text-white drop-shadow-lg" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                            <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/><circle cx="17" cy="7" r="1"/>
+                          </svg>
+                        </div>
+                        {/* Right side action buttons */}
+                        <div className="absolute right-1.5 bottom-10 flex flex-col items-center gap-3">
+                          {/* Like */}
+                          <div className="flex flex-col items-center">
+                            <svg className="w-6 h-6 text-white drop-shadow-lg" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+                            </svg>
+                            <span className="text-white text-[8px] font-semibold drop-shadow-lg">420</span>
+                          </div>
+                          {/* Comment */}
+                          <div className="flex flex-col items-center">
+                            <svg className="w-6 h-6 text-white drop-shadow-lg" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+                            </svg>
+                            <span className="text-white text-[8px] font-semibold drop-shadow-lg">4000</span>
+                          </div>
+                          {/* Share */}
+                          <div className="flex flex-col items-center">
+                            <svg className="w-6 h-6 text-white drop-shadow-lg" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                            </svg>
+                            <span className="text-white text-[8px] font-semibold drop-shadow-lg">69 d...</span>
+                          </div>
+                          {/* More */}
+                          <svg className="w-5 h-5 text-white drop-shadow-lg" fill="currentColor" viewBox="0 0 24 24">
+                            <circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/>
+                          </svg>
+                          {/* Audio */}
+                          <div className="w-6 h-6 rounded border-2 border-white overflow-hidden">
+                            <div className="w-full h-full bg-gradient-to-br from-purple-600 to-pink-500" />
+                          </div>
+                        </div>
+                        {/* Bottom info */}
+                        <div className="absolute bottom-2 left-1.5 right-10">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 p-0.5">
+                              <div className="w-full h-full rounded-full bg-gray-900 flex items-center justify-center">
+                                <span className="text-white text-[7px] font-bold">U</span>
+                              </div>
+                            </div>
+                            <span className="text-white text-[9px] font-bold drop-shadow-lg">StreamLadder</span>
+                            <svg className="w-3 h-3 text-blue-400" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                            </svg>
+                            <span className="px-1.5 py-0.5 border border-white rounded text-[7px] font-semibold text-white">Follow</span>
+                          </div>
+                          <p className="text-white text-[8px] leading-tight drop-shadow-lg">You are such a beautiful person</p>
+                          <div className="flex items-center gap-1 mt-1">
+                            <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+                            </svg>
+                            <span className="text-white text-[7px] drop-shadow-lg">Darude sandstorm</span>
+                            <span className="text-white/70 text-[7px] ml-1">👤 55 users</span>
+                          </div>
+                        </div>
+                        {/* Bottom progress and comment */}
+                        <div className="absolute bottom-1 left-1.5 right-1.5 flex items-center justify-between">
+                          <div className="w-4 h-4 rounded bg-white/20 flex items-center justify-center">
+                            <span className="text-white text-[6px] font-bold">100</span>
+                          </div>
+                          <div className="flex-1 mx-2 h-5 rounded-full bg-white/20 flex items-center px-2">
+                            <span className="text-white/50 text-[7px]">Add a comment...</span>
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
-                  <div className="w-8 h-8 rounded-full bg-gray-800/80 flex items-center justify-center">
-                    <MessageSquare className="w-4 h-4 text-white" />
-                  </div>
-                  <div className="w-8 h-8 rounded-full bg-gray-800/80 flex items-center justify-center">
-                    <span className="text-white text-xs">↗</span>
-                  </div>
-                </div>
+                )}
               </div>
 
-              {/* Platform Selector */}
-              <div 
-                className="flex items-center gap-2 shrink-0"
-                style={{ width: `${editorScale * 202.5}px` }}
+              {/* Preview Controls: Platform Selector */}
+              <div
+                className="flex items-center justify-between gap-2 shrink-0"
+                style={{ width: `${currentScale * 202.5}px` }}
               >
-                <select
-                  value={previewPlatform}
-                  onChange={(e) => setPreviewPlatform(e.target.value as PreviewPlatform)}
-                  className="bg-transparent border border-gray-700 rounded px-2 py-1 text-xs text-gray-400 hover:border-gray-500 focus:outline-none focus:border-purple-500"
+                {/* Platform Selector */}
+                <div className="flex items-center gap-1">
+                  {/* No overlay */}
+                  <button
+                    onClick={() => setPreviewPlatform('none')}
+                    className={`p-1.5 rounded transition-colors ${previewPlatform === 'none' ? 'bg-gray-700' : 'hover:bg-gray-800'}`}
+                    title="No overlay"
+                  >
+                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <rect x="3" y="3" width="18" height="18" rx="2"/>
+                      <line x1="3" y1="3" x2="21" y2="21"/>
+                    </svg>
+                  </button>
+                {/* YouTube */}
+                <button
+                  onClick={() => setPreviewPlatform('youtube')}
+                  className={`p-1.5 rounded transition-colors ${previewPlatform === 'youtube' ? 'bg-gray-700' : 'hover:bg-gray-800'}`}
+                  title="YouTube Shorts"
                 >
-                  <option value="youtube" className="bg-[#12121f]">🔴 YouTube preview</option>
-                  <option value="tiktok" className="bg-[#12121f]">TikTok preview</option>
-                </select>
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="#FF0000">
+                    <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                  </svg>
+                </button>
+                {/* TikTok */}
+                <button
+                  onClick={() => setPreviewPlatform('tiktok')}
+                  className={`p-1.5 rounded transition-colors ${previewPlatform === 'tiktok' ? 'bg-gray-700' : 'hover:bg-gray-800'}`}
+                  title="TikTok"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z" fill="#fff"/>
+                    <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z" fill="#25F4EE" style={{ transform: 'translate(-2px, -2px)' }}/>
+                    <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z" fill="#FE2C55" style={{ transform: 'translate(2px, 2px)' }}/>
+                  </svg>
+                </button>
+                {/* Instagram */}
+                <button
+                  onClick={() => setPreviewPlatform('instagram')}
+                  className={`p-1.5 rounded transition-colors ${previewPlatform === 'instagram' ? 'bg-gray-700' : 'hover:bg-gray-800'}`}
+                  title="Instagram Reels"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <defs>
+                      <linearGradient id="igGradient" x1="0%" y1="100%" x2="100%" y2="0%">
+                        <stop offset="0%" stopColor="#FFDC80"/>
+                        <stop offset="25%" stopColor="#F77737"/>
+                        <stop offset="50%" stopColor="#F56040"/>
+                        <stop offset="75%" stopColor="#C13584"/>
+                        <stop offset="100%" stopColor="#833AB4"/>
+                      </linearGradient>
+                    </defs>
+                    <rect x="2" y="2" width="20" height="20" rx="5" fill="url(#igGradient)"/>
+                    <circle cx="12" cy="12" r="4" fill="none" stroke="#fff" strokeWidth="2"/>
+                    <circle cx="17.5" cy="6.5" r="1.5" fill="#fff"/>
+                  </svg>
+                </button>
+                </div>
+
               </div>
             </div>
           </div>
@@ -1985,16 +2982,23 @@ export default function EditClipPage() {
               const nextIndex = (currentIndex + 1) % SIDEBAR_ITEMS.length
               setActiveTab(SIDEBAR_ITEMS[nextIndex].id)
             }}
-            nextStepLabel={SIDEBAR_ITEMS.find((_, i) => i === (SIDEBAR_ITEMS.findIndex(item => item.id === activeTab) + 1) % SIDEBAR_ITEMS.length)?.label || 'Elements'}
+            nextStepLabel={SIDEBAR_ITEMS[(SIDEBAR_ITEMS.findIndex(item => item.id === activeTab) + 1) % SIDEBAR_ITEMS.length]?.label || 'Elements'}
+            onPrevStep={() => {
+              const currentIndex = SIDEBAR_ITEMS.findIndex(item => item.id === activeTab)
+              const prevIndex = currentIndex > 0 ? currentIndex - 1 : SIDEBAR_ITEMS.length - 1
+              setActiveTab(SIDEBAR_ITEMS[prevIndex].id)
+            }}
+            prevStepLabel={SIDEBAR_ITEMS[Math.max(0, SIDEBAR_ITEMS.findIndex(item => item.id === activeTab) - 1)]?.label || ''}
+            isFirstStep={SIDEBAR_ITEMS.findIndex(item => item.id === activeTab) === 0}
             onOpenCaptions={() => setActiveTab('captions')}
             hasCaptions={captions.length > 0}
             overlays={overlays}
             selectedOverlayId={selectedOverlayId}
             onSelectOverlay={setSelectedOverlayId}
+            onOverlayDragStart={pushToUndoStack}
             onUpdateOverlayTiming={(id, startTime, endTime) => {
-              pushToUndoStack()
-              setOverlays(prev => prev.map(o => 
-                o.id === id 
+              setOverlays(prev => prev.map(o =>
+                o.id === id
                   ? { ...o, startTime, endTime }
                   : o
               ))
@@ -2003,9 +3007,60 @@ export default function EditClipPage() {
             canRedo={redoStack.length > 0}
             onUndo={handleUndo}
             onRedo={handleRedo}
+            zoomKeyframes={zoomKeyframes}
+            selectedZoomId={selectedZoomId}
+            onSelectZoom={(id) => {
+              setSelectedZoomId(id)
+              if (id) {
+                setSelectedOverlayId(null)
+                setSelectedCropId(null)
+                // Switch to effects tab and open zoom panel when selecting a zoom in timeline
+                setActiveTab('effects')
+                setRequestZoomPanelOpen(true)
+              }
+            }}
+            onUpdateZoomTiming={handleUpdateZoomTiming}
+            onDeleteZoom={handleDeleteZoom}
+            audioTracks={audioTracks}
+            selectedAudioId={selectedAudioId}
+            onSelectAudio={(id) => {
+              setSelectedAudioId(id)
+              if (id) {
+                setSelectedOverlayId(null)
+                setSelectedZoomId(null)
+                setSelectedCropId(null)
+                // Switch to audio tab when selecting an audio track in timeline
+                setActiveTab('audio')
+              }
+            }}
+            onUpdateAudioTiming={handleUpdateAudioTiming}
+            onDeleteAudio={handleDeleteAudio}
+            visualEffects={visualEffects}
+            selectedEffectId={selectedEffectId}
+            onSelectEffect={(id) => {
+              setSelectedEffectId(id)
+              if (id) {
+                setSelectedOverlayId(null)
+                setSelectedZoomId(null)
+                setSelectedAudioId(null)
+                setSelectedCropId(null)
+                setActiveTab('effects')
+              }
+            }}
+            onUpdateEffectTiming={handleUpdateVisualEffectTiming}
+            onDeleteEffect={handleDeleteVisualEffect}
           />
         )}
       </div>
+
+      {/* Trim Audio Modal */}
+      {trimModalTrack && (
+        <TrimAudioModal
+          track={trimModalTrack}
+          onClose={() => setTrimModalTrack(null)}
+          onConfirm={handleTrimAudio}
+        />
+      )}
     </div>
   )
 }

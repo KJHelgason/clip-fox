@@ -4,19 +4,23 @@ import { useEffect, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
-import { 
-  Home, 
-  Upload, 
-  FolderOpen, 
-  Sparkles, 
-  Calendar, 
+import {
+  Home,
+  Upload,
+  FolderOpen,
+  Sparkles,
+  Calendar,
   Video,
   Settings,
   Bell,
   Link2,
   ChevronDown,
   LogOut,
-  Plus
+  Plus,
+  CreditCard,
+  Zap,
+  Download,
+  BarChart3
 } from 'lucide-react'
 
 type Profile = {
@@ -80,14 +84,16 @@ export default function DashboardLayout({
     { href: '/dashboard', icon: Home, label: 'Start', exact: true },
     { href: '/dashboard/upload', icon: Upload, label: 'Upload Clip' },
     { href: '/dashboard/clips', icon: FolderOpen, label: 'My Videos' },
-    { href: '/dashboard/ai-clipping', icon: Sparkles, label: 'ClipGPT: AI Clipping' },
-    { href: '/dashboard/schedule', icon: Calendar, label: 'Share & Schedule' },
-    { href: '/dashboard/projects', icon: Video, label: 'My Projects' },
+    { href: '/dashboard/quick-edit', icon: Zap, label: 'Quick Edit' },
+    { href: '/dashboard/clipgpt', icon: Sparkles, label: 'ClipGPT: AI Clipping' },
+    { href: '/dashboard/publish', icon: Calendar, label: 'Share & Schedule' },
+    { href: '/dashboard/download', icon: Download, label: 'Clip Downloader' },
+    { href: '/dashboard/analytics', icon: BarChart3, label: 'Analytics' },
   ]
 
   const bottomNavItems = [
-    { href: '/dashboard/notifications', icon: Bell, label: 'Notifications' },
-    { href: '/dashboard/connections', icon: Link2, label: 'Social Media Connections' },
+    { href: '/dashboard/settings/billing', icon: CreditCard, label: 'Billing & Plans' },
+    { href: '/dashboard/connections', icon: Link2, label: 'Social Connections' },
   ]
 
   if (loading) {

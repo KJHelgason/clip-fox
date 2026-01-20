@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:streamladder.com)",
+      "WebFetch(domain:app.streamladder.com)",
+      "Bash(wc:*)",
+      "Bash(npm install)",
+      "Bash(npx tsc:*)"
+    ]
+  }
+}

@@ -8,7 +8,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Slider } from '@/components/ui/slider'
 
 type AspectRatioOption = 'freeform' | 'fullscreen' | '16:9' | '4:3' | 'square' | 'circle'
 
@@ -102,25 +101,35 @@ export function CropToolbar({
         {showRoundingSlider && (
           <>
             <div 
-              className="fixed inset-0 z-40" 
+              className="fixed inset-0 z-[9998]" 
               onClick={() => setShowRoundingSlider(false)}
             />
-            <div className="absolute left-0 top-full mt-2 bg-[#1a1a2e] border border-gray-700 rounded-lg p-4 shadow-xl z-50 w-56">
+            <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 bg-[#1a1a2e] border border-gray-700 rounded-lg p-4 shadow-xl z-[9999] w-56">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-sm font-medium text-gray-300">Corner Rounding</span>
                 <span className="text-sm text-purple-400 font-semibold">{Math.round(sliderValue)}%</span>
               </div>
-              <Slider
-                value={[sliderValue]}
-                onValueChange={(values) => onCornerRoundingChange(values[0])}
-                min={0}
-                max={100}
-                step={1}
-                className="w-full [&>span:first-child]:bg-gradient-to-r [&>span:first-child]:from-purple-600 [&>span:first-child]:to-pink-600 [&>span:first-child]:hover:from-purple-500 [&>span:first-child]:hover:to-pink-500 [&>span:last-child]:bg-gradient-to-r [&>span:last-child]:from-purple-600 [&>span:last-child]:to-pink-600 [&>span:last-child]:hover:from-purple-500 [&>span:last-child]:hover:to-pink-500"
-              />
-              <div className="flex justify-between mt-2 text-xs text-gray-500">
-                <span>0%</span>
-                <span>100%</span>
+              {/* Custom slim slider with gradient */}
+              <div className="relative w-full h-6 flex items-center">
+                <div className="absolute inset-x-0 h-1.5 rounded-full bg-gray-700 pointer-events-none">
+                  <div 
+                    className="absolute h-full rounded-full bg-gradient-to-r from-purple-500 to-pink-500"
+                    style={{ width: `${sliderValue}%` }}
+                  />
+                </div>
+                <div 
+                  className="absolute w-4 h-4 bg-white rounded-full shadow-lg border-2 border-purple-500 pointer-events-none transition-transform"
+                  style={{ left: `calc(${sliderValue}% - 8px)` }}
+                />
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={sliderValue}
+                  onChange={(e) => onCornerRoundingChange(Number(e.target.value))}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                />
               </div>
             </div>
           </>

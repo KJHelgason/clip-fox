@@ -1,13 +1,421 @@
 // Shared types for the clip editor
 
+// ============================================
+// Subscription & Billing Types
+// ============================================
+
+export type PlanId = 'free' | 'pro' | 'business'
+
+export type BillingInterval = 'monthly' | 'yearly'
+
+export type SubscriptionStatus = 'active' | 'canceled' | 'past_due' | 'trialing' | 'incomplete'
+
+export type SubscriptionPlan = {
+  id: PlanId
+  name: string
+  description: string
+  price_monthly: number // in cents
+  price_yearly: number // in cents
+  stripe_price_id_monthly?: string
+  stripe_price_id_yearly?: string
+  features: string[]
+  limits: PlanLimits
+  is_active: boolean
+}
+
+export type PlanLimits = {
+  exports_per_month: number // -1 for unlimited
+  max_resolution: '720p' | '1080p' | '1440p' | '4k'
+  watermark: boolean
+  ai_captions: boolean
+  clipgpt: boolean
+  social_publishing: boolean
+  auto_clip?: boolean
+  analytics?: boolean
+  storage_gb: number
+}
+
+export type Subscription = {
+  id: string
+  user_id: string
+  plan_id: PlanId
+  stripe_customer_id?: string
+  stripe_subscription_id?: string
+  status: SubscriptionStatus
+  billing_interval: BillingInterval
+  current_period_start?: string
+  current_period_end?: string
+  cancel_at_period_end: boolean
+  canceled_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export type UsageLogAction =
+  | 'export'
+  | 'ai_transcription'
+  | 'ai_caption'
+  | 'ai_censor'
+  | 'ai_hook'
+  | 'clipgpt_analysis'
+  | 'social_publish'
+  | 'download'
+
+export type UsageLog = {
+  id: string
+  user_id: string
+  action_type: UsageLogAction
+  resource_id?: string
+  metadata?: Record<string, unknown>
+  credits_used: number
+  created_at: string
+}
+
+// ============================================
+// Auto-Clip Pipeline Types
+// ============================================
+
+export type AutoClipPlatform = 'youtube' | 'twitch' | 'kick'
+
+export type AutoClipMonitorType = 'vods' | 'clips' | 'uploads' | 'highlights'
+
+export type AutoClipEditPreferences = {
+  captions: boolean
+  zoom_facecam: boolean
+  silence_removal: boolean
+  censoring: boolean
+  stickers?: string[]
+}
+
+export type AutoClipOutputSettings = {
+  aspect_ratio: AspectRatio
+  quality: '720p' | '1080p' | '1440p' | '4k'
+  watermark: boolean
+}
+
+export type AutoClipSettings = {
+  id: string
+  user_id: string
+  platform: AutoClipPlatform
+  enabled: boolean
+  channel_id?: string
+  monitor_types: AutoClipMonitorType[]
+  edit_preferences: AutoClipEditPreferences
+  output_settings: AutoClipOutputSettings
+  auto_publish: boolean
+  publish_destinations: string[]
+  approval_required: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type AutoClipQueueStatus =
+  | 'pending'
+  | 'processing'
+  | 'awaiting_approval'
+  | 'approved'
+  | 'rejected'
+  | 'published'
+  | 'failed'
+
+export type DetectedMoment = {
+  start: number
+  end: number
+  virality_score: number
+  title: string
+  category?: string
+}
+
+export type AutoClipQueueItem = {
+  id: string
+  user_id: string
+  source_platform: string
+  source_url: string
+  source_type: 'vod' | 'clip' | 'upload' | 'highlight'
+  detected_moments: DetectedMoment[]
+  status: AutoClipQueueStatus
+  edit_result_url?: string
+  scheduled_publish_at?: string
+  published_urls?: Record<string, string>
+  error_message?: string
+  created_at: string
+  updated_at: string
+}
+
+// ============================================
+// ClipGPT Types
+// ============================================
+
+export type ClipGPTProjectStatus =
+  | 'pending'
+  | 'downloading'
+  | 'analyzing'
+  | 'completed'
+  | 'failed'
+
+export type ClipGPTProject = {
+  id: string
+  user_id: string
+  title?: string
+  vod_url: string
+  platform: 'youtube' | 'twitch' | 'kick'
+  vod_duration?: number
+  status: ClipGPTProjectStatus
+  progress: number
+  clips_found: number
+  error_message?: string
+  created_at: string
+  updated_at: string
+}
+
+export type ClipGPTMoment = {
+  id: string
+  project_id: string
+  start_time: number
+  end_time: number
+  duration: number
+  virality_score: number
+  title?: string
+  description?: string
+  hashtags?: string[]
+  thumbnail_url?: string
+  category?: string
+  exported: boolean
+  export_id?: string
+  created_at: string
+}
+
+// ============================================
+// Social Publishing Types
+// ============================================
+
+export type SocialPublishPlatform = 'tiktok' | 'youtube' | 'instagram' | 'twitter' | 'facebook'
+
+export type SocialConnection = {
+  id: string
+  user_id: string
+  platform: SocialPublishPlatform
+  platform_user_id?: string
+  platform_username?: string
+  platform_display_name?: string
+  platform_avatar_url?: string
+  access_token?: string
+  refresh_token?: string
+  token_expires_at?: string
+  scopes?: string[]
+  is_active: boolean
+  last_used_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export type ScheduledPostStatus = 'scheduled' | 'publishing' | 'published' | 'failed' | 'canceled'
+
+export type ScheduledPost = {
+  id: string
+  user_id: string
+  clip_id?: string
+  export_id?: string
+  platform: string
+  connection_id?: string
+  title?: string
+  description?: string
+  hashtags?: string[]
+  scheduled_for: string
+  status: ScheduledPostStatus
+  published_url?: string
+  platform_post_id?: string
+  error_message?: string
+  created_at: string
+  updated_at: string
+}
+
+// ============================================
+// Montage Types
+// ============================================
+
+export type MontageTransition = {
+  type: 'fade' | 'slide' | 'zoom' | 'dissolve' | 'wipe'
+  duration: number
+}
+
+export type Montage = {
+  id: string
+  user_id: string
+  title: string
+  clip_ids: string[]
+  transitions: MontageTransition[]
+  output_path?: string
+  output_url?: string
+  total_duration?: number
+  status: 'draft' | 'processing' | 'completed' | 'failed'
+  progress: number
+  error_message?: string
+  created_at: string
+  updated_at: string
+}
+
+// ============================================
+// Stream Schedule Types
+// ============================================
+
+export type ScheduleSlot = {
+  start: string // HH:MM format
+  end: string
+  title: string
+  color?: string
+}
+
+export type WeeklySchedule = {
+  monday?: ScheduleSlot[]
+  tuesday?: ScheduleSlot[]
+  wednesday?: ScheduleSlot[]
+  thursday?: ScheduleSlot[]
+  friday?: ScheduleSlot[]
+  saturday?: ScheduleSlot[]
+  sunday?: ScheduleSlot[]
+}
+
+export type StreamSchedule = {
+  id: string
+  user_id: string
+  template_name: string
+  timezone: string
+  schedule: WeeklySchedule
+  style_settings?: {
+    background_color?: string
+    text_color?: string
+    accent_color?: string
+    font_family?: string
+  }
+  output_url?: string
+  created_at: string
+  updated_at: string
+}
+
+// Animation types available for elements
+export type AnimationType = 
+  | 'none' | 'reveal' | 'fade-in' | 'slide-right' | 'slide-left' | 'slide-top' | 'slide-bottom'
+  | 'shrink' | 'bounce-in' | 'slide' | 'rotate' | 'sway'
+  // Text-only animations
+  | 'stick' | 'appear' | 'land' | 'pop' | 'unfold' | 'emerge' | 'burst' | 'jump' | 'glide'
+  | 'flip' | 'float' | 'impact' | 'hop' | 'drift' | 'groove' | 'bounce' | 'shake' | 'whirl'
+
+export type OverlayAnimation = {
+  in: AnimationType
+  out: AnimationType
+  inDuration?: number // in seconds
+  outDuration?: number // in seconds
+  easing?: 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out'
+}
+
+// Fill types for text styling
+export type FillType = {
+  type: 'solid' | 'gradient'
+  color?: string // for solid
+  gradient?: {
+    type: 'linear' | 'radial'
+    angle?: number // for linear (0-360)
+    stops: Array<{ position: number; color: string }> // position 0-100
+  }
+}
+
+// Text style properties
+export type TextStyle = {
+  fontFamily: string
+  fill: FillType
+  outline?: {
+    color: string
+    width: number
+  }
+  shadow?: {
+    color: string
+    blur: number
+    x: number
+    y: number
+  }
+  glow?: {
+    color: string
+    strength: number
+  }
+  background?: {
+    color: string
+    opacity: number
+    radius: number
+  }
+}
+
+// Social sticker types
+export type SocialPlatform = 'youtube' | 'tiktok' | 'instagram' | 'twitch' | 'kick' | 'twitter' | 'facebook' | 'discord'
+
+// Sticker template types
+export type StickerTemplate =
+  | 'basic'           // Icon + username
+  | 'follow'          // "Follow" label + icon + username
+  | 'subscribe'       // "Subscribe" button style
+  | 'banner'          // Wide banner with gradient
+  | 'badge'           // Compact badge style
+  | 'card'            // Card with icon and text
+  | 'minimal'         // Just icon and text, no background
+
+export type SocialSticker = {
+  id: string
+  name: string
+  platform: SocialPlatform | 'multiple'
+  platforms?: SocialPlatform[] // for 'multiple' type
+  type: 'image' | 'animated'
+  category: 'animated' | 'multiple' | SocialPlatform
+  styles: string[] // available style variants
+  defaultStyle: string
+  thumbnailSrc: string
+  // Template for rendering
+  template: StickerTemplate
+  // For animated stickers
+  animationSrc?: string
+  animation?: string // animation type: fadeIn, slideRight, bounceIn, etc.
+}
+
+// Custom element from user upload
+export type CustomElement = {
+  id: string
+  user_id: string
+  name: string
+  file_path: string
+  file_url: string
+  file_type: 'image' | 'gif'
+  width?: number
+  height?: number
+  file_size?: number
+  created_at: string
+}
+
+// Social usernames for sticker customization
+export type SocialUsernames = {
+  id?: string
+  user_id?: string
+  youtube?: string
+  tiktok?: string
+  instagram?: string
+  twitch?: string
+  kick?: string
+  twitter?: string
+  facebook?: string
+  discord?: string
+}
+
+// Reaction platform types
+export type ReactionPlatform = 'twitch' | 'tiktok' | 'instagram' | 'twitter'
+
 export type OverlayElement = {
   id: string
-  type: 'text' | 'image' | 'sticker' | 'caption'
-  // Position on video canvas (px, relative to video container)
+  type: 'text' | 'image' | 'sticker' | 'caption' | 'social-sticker' | 'reaction'
+  // Position on video canvas (percentage, relative to video container)
   videoLeft: number
   videoTop: number
   videoWidth: number
   videoHeight: number
+  // Original aspect ratio (for fixed aspect ratio elements)
+  aspectRatio?: number
   // Position on timeline (px)
   timelineLeft: number
   timelineTop: number
@@ -32,6 +440,20 @@ export type OverlayElement = {
   textShadow?: string
   letterSpacing?: number
   lineHeight?: number
+  // Advanced text style
+  textStyle?: TextStyle
+  // Social sticker specific
+  socialStickerId?: string
+  socialPlatforms?: SocialPlatform[]
+  stickerStyle?: string
+  stickerTemplate?: StickerTemplate
+  stickerAnimated?: boolean
+  stickerAnimation?: string
+  // Reaction specific
+  reactionPlatform?: ReactionPlatform
+  reactionUsername?: string
+  reactionMessage?: string
+  reactionDarkMode?: boolean
   // Visual effects
   opacity?: number
   rotation?: number
@@ -39,13 +461,6 @@ export type OverlayElement = {
   borderRadius?: number
   // Animation
   animation?: OverlayAnimation
-}
-
-export type OverlayAnimation = {
-  type: 'none' | 'fade-in' | 'fade-out' | 'slide-up' | 'slide-down' | 'slide-left' | 'slide-right' | 'bounce' | 'zoom-in' | 'zoom-out' | 'typewriter'
-  duration?: number // in seconds
-  delay?: number // in seconds
-  easing?: 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out'
 }
 
 export type Clip = {
@@ -259,7 +674,7 @@ export const CAPTION_STYLES: CaptionStyle[] = [
     fontSize: 24,
     fontWeight: '700',
     color: '#ffffff',
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: 'transparent',
     borderRadius: 8,
     padding: '8px 16px'
   },
@@ -316,11 +731,47 @@ export const CAPTION_STYLES: CaptionStyle[] = [
 // Zoom keyframe for video effects
 export type ZoomKeyframe = {
   id: string
+  segmentId: string // Groups start/end keyframes together as one segment
   time: number // seconds
   scale: number // 1 = 100%, 1.5 = 150%
   x: number // 0-100, pan position
   y: number // 0-100, pan position
   easing: 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out'
+}
+
+// Visual effect types
+export type VisualEffectType = 'zoom-blur' | 'shake' | 'slide-shake' | 'morph' | 'slide' | 'glitch' | 'pixelate'
+
+export type VisualEffect = {
+  id: string
+  type: VisualEffectType
+  startTime: number // seconds
+  endTime: number // seconds
+}
+
+// Audio track for timeline
+export type AudioTrack = {
+  id: string
+  soundId: string
+  name: string
+  url: string // Blob URL or remote URL
+  startTime: number // When it starts on timeline (seconds)
+  duration: number // Full duration of audio (seconds)
+  trimStart: number // Trim from beginning (seconds)
+  trimEnd: number // Trim from end (seconds, relative to end)
+  volume: number // 0-100
+  isUserUploaded: boolean
+  category: 'uploaded' | 'full-songs' | 'ambient' | 'gaming' | 'spooky' | 'reactions'
+}
+
+// Sound effect in library
+export type SoundEffect = {
+  id: string
+  name: string
+  duration: number // in seconds
+  category: 'uploaded' | 'full-songs' | 'ambient' | 'gaming' | 'spooky' | 'reactions'
+  url: string
+  isUserUploaded?: boolean
 }
 
 // Export settings

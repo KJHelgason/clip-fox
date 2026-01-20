@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase'
 
 export type Clip = {
   id: string
+  user_id: string
   title: string | null
   video_path: string
   signedUrl: string | null

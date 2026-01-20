@@ -1,6 +1,6 @@
 'use client'
 
-import React from 'react'
+import React, { useRef, useEffect } from 'react'
 import { CropRegion, PreviewDragType } from '@/lib/hooks/usePreviewCropDrag'
 
 type PreviewCropRegionProps = {
@@ -14,6 +14,9 @@ type PreviewCropRegionProps = {
   // Preview container dimensions (fixed pixels)
   containerWidth: number
   containerHeight: number
+  // Main video ref for syncing
+  mainVideoRef: HTMLVideoElement | null
+  playing: boolean
 }
 
 /**
@@ -31,38 +34,86 @@ export function PreviewCropRegion({
   onMouseDown,
   containerWidth,
   containerHeight,
+  mainVideoRef,
+  playing,
 }: PreviewCropRegionProps) {
+  const cropVideoRef = useRef<HTMLVideoElement>(null)
+  
+  // Sync this crop's video with the main video
+  useEffect(() => {
+    if (!mainVideoRef || !cropVideoRef.current) return
+    
+    const cropVideo = cropVideoRef.current
+    
+    const syncTime = () => {
+      if (Math.abs(cropVideo.currentTime - mainVideoRef.currentTime) > 0.5) {
+        cropVideo.currentTime = mainVideoRef.currentTime
+      }
+    }
+    
+    const syncSeek = () => {
+      cropVideo.currentTime = mainVideoRef.currentTime
+    }
+    
+    mainVideoRef.addEventListener('seeked', syncSeek)
+    mainVideoRef.addEventListener('timeupdate', syncTime)
+    
+    // Initial sync
+    cropVideo.currentTime = mainVideoRef.currentTime
+    
+    return () => {
+      mainVideoRef.removeEventListener('seeked', syncSeek)
+      mainVideoRef.removeEventListener('timeupdate', syncTime)
+    }
+  }, [mainVideoRef])
+  
+  // Sync play/pause state
+  useEffect(() => {
+    const cropVideo = cropVideoRef.current
+    if (!cropVideo || !mainVideoRef) return
+    
+    cropVideo.currentTime = mainVideoRef.currentTime
+    
+    if (playing) {
+      cropVideo.play().catch(() => {})
+    } else {
+      cropVideo.pause()
+    }
+  }, [playing, mainVideoRef])
   
   // Source video is 16:9. Use reference dimensions for calculations.
   const refVideoW = 160
   const refVideoH = 90
-  
+
   // The crop region at reference scale
   const cropW = (crop.width / 100) * refVideoW
   const cropH = (crop.height / 100) * refVideoH
   const cropX = (crop.x / 100) * refVideoW
   const cropY = (crop.y / 100) * refVideoH
-  
+
   // The crop's aspect ratio (from source video crop)
   const cropAspect = cropW / cropH
-  
+
   // Calculate box dimensions based on preview percentages
-  const boxW = (crop.previewWidth / 100) * containerWidth
+  // Enforce minimum size so very small source crops don't become unusable in preview
+  const minBoxWidth = containerWidth * 0.15 // Minimum 15% of container width
+  const rawBoxW = (crop.previewWidth / 100) * containerWidth
+  const boxW = Math.max(minBoxWidth, rawBoxW)
   const boxH = boxW / cropAspect // Height derived from aspect ratio
-  
-  // Position from percentages
-  const boxLeft = (crop.previewX / 100) * containerWidth
-  const boxTop = (crop.previewY / 100) * containerHeight
-  
-  // Scale the video so the crop region fills the box
+
+  // Position from percentages (adjust if we enforced minimum size)
+  const boxLeft = Math.min((crop.previewX / 100) * containerWidth, containerWidth - boxW)
+  const boxTop = Math.min((crop.previewY / 100) * containerHeight, containerHeight - boxH)
+
+  // Scale the video so the crop region fills the box (no zoom applied here - zoom is a separate overlay)
   const scale = boxW / cropW
   const scaledVideoW = refVideoW * scale
   const scaledVideoH = refVideoH * scale
-  
+
   // Position video so crop region is at origin of box
   const videoLeft = -cropX * scale
   const videoTop = -cropY * scale
-  
+
   // Apply corner rounding
   const cornerRounding = crop.cornerRounding || 0
   const borderRadius = cornerRounding > 0 ? `${cornerRounding}%` : '0'
@@ -75,7 +126,7 @@ export function PreviewCropRegion({
         top: boxTop,
         width: boxW,
         height: boxH,
-        zIndex: crop.zIndex || (isSelected ? 50 : 40),
+        zIndex: 10 + (crop.zIndex || 1), // BASE: 10-49, z-order only changes via "Bring to Front"
       }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
@@ -98,6 +149,7 @@ export function PreviewCropRegion({
       >
         {/* Video positioned and scaled so crop region fills this box */}
         <video
+          ref={cropVideoRef}
           src={videoSrc}
           className="absolute pointer-events-none"
           style={{

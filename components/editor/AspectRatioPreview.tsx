@@ -203,7 +203,7 @@ export default function AspectRatioPreview({
                 fontWeight: overlay.fontWeight,
                 fontStyle: overlay.fontStyle,
                 color: overlay.color || '#fff',
-                backgroundColor: overlay.backgroundColor || (overlay.type === 'text' ? 'rgba(0,0,0,0.6)' : 'transparent'),
+                backgroundColor: overlay.backgroundColor || 'transparent',
                 borderRadius: (overlay.borderRadius || 4) * scale,
                 opacity: overlay.opacity ?? 1,
                 transform: overlay.rotation ? `rotate(${overlay.rotation}deg)` : undefined,

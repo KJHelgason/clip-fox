@@ -115,7 +115,7 @@ export function usePreviewCropDrag({
       if (!container) return
 
       // Use inner container if available for accurate dimensions
-      const innerContainer = (container as any).innerContainer
+      const innerContainer = (container as HTMLDivElement & { innerContainer?: HTMLDivElement }).innerContainer
       const rect = innerContainer ? innerContainer.getBoundingClientRect() : container.getBoundingClientRect()
 
       // Calculate delta in percentage terms
@@ -337,9 +337,9 @@ function calculateResize(
       }
       
       // Calculate height and check bottom edge
-      let newWidthPx = (newWidth / 100) * containerWidth
-      let newHeightPx = newWidthPx / aspectRatio
-      let newHeightPercent = (newHeightPx / containerHeight) * 100
+      const newWidthPx = (newWidth / 100) * containerWidth
+      const newHeightPx = newWidthPx / aspectRatio
+      const newHeightPercent = (newHeightPx / containerHeight) * 100
       
       // If bottom would extend beyond container, shrink width to fit
       // This prevents crop from becoming taller than the preview container
@@ -380,7 +380,7 @@ function calculateResize(
       }
       
       // Calculate new Y from anchored bottom
-      let newHeightPercent = (newHeightPx / containerHeight) * 100
+      const newHeightPercent = (newHeightPx / containerHeight) * 100
       let newY = anchorBottomPercent - newHeightPercent
       
       // Clamp to top edge - also prevent crop from exceeding container height

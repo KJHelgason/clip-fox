@@ -1631,12 +1631,12 @@ export default function EditClipPage() {
           {/* Panel Header */}
           <div className="h-14 px-4 flex items-center justify-between border-b border-gray-800">
           <div>
-            <h2 className="text-sm font-semibold capitalize">{activeTab}</h2>
+            <h2 className="text-sm font-semibold capitalize">{activeTab === 'audio' ? 'Sound Effects' : activeTab}</h2>
             <p className="text-xs text-gray-500">
               {activeTab === 'layouts' && 'Choose your layout'}
               {activeTab === 'elements' && 'Add elements to increase engagement'}
               {activeTab === 'effects' && 'Add effects to enhance your clip'}
-              {activeTab === 'audio' && 'Add cool sound effects'}
+              {activeTab === 'audio' && 'Add sound effects and music to enhance your video'}
               {activeTab === 'captions' && 'Edit your captions'}
               {activeTab === 'export' && 'Select your quality'}
             </p>
@@ -1720,6 +1720,7 @@ export default function EditClipPage() {
               selectedAudioTrack={selectedAudioTrack}
               onUpdateAudioTrack={handleUpdateAudioTrack}
               onOpenTrimModal={(track) => setTrimModalTrack(track)}
+              userId={clip?.user_id}
             />
           )}
           {activeTab === 'captions' && (
@@ -1741,6 +1742,8 @@ export default function EditClipPage() {
               overlays={overlays}
               zoomKeyframes={zoomKeyframes}
               thumbs={thumbs}
+              cropRegions={cropRegions}
+              videoSrc={clip?.signedUrl || undefined}
               onExport={handleExport}
             />
           )}
@@ -1880,7 +1883,7 @@ export default function EditClipPage() {
         {/* Video Preview Area - StreamLadder style with crop regions */}
         <div
           ref={editorContainerRef}
-          className="flex-1 flex items-center justify-center p-4 md:p-6 overflow-auto bg-[#0a0a14]"
+          className="flex-1 flex items-center justify-center p-4 md:p-6 overflow-hidden bg-[#0a0a14]"
           onClick={() => zoomDropdownOpen && setZoomDropdownOpen(false)}
         >
           <div

@@ -282,7 +282,7 @@ export default function LayoutTemplates({
           ].map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
+              onClick={() => setActiveTab(tab.id as 'all' | 'templates' | 'layouts')}
               className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                 activeTab === tab.id
                   ? 'bg-white text-black'

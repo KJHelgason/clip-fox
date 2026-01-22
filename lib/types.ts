@@ -189,7 +189,7 @@ export type ClipGPTMoment = {
 // Social Publishing Types
 // ============================================
 
-export type SocialPublishPlatform = 'tiktok' | 'youtube' | 'instagram' | 'twitter' | 'facebook'
+export type SocialPublishPlatform = 'tiktok' | 'youtube' | 'instagram' | 'twitter' | 'facebook' | 'twitch' | 'kick'
 
 export type SocialConnection = {
   id: string
@@ -761,7 +761,7 @@ export type AudioTrack = {
   trimEnd: number // Trim from end (seconds, relative to end)
   volume: number // 0-100
   isUserUploaded: boolean
-  category: 'uploaded' | 'full-songs' | 'ambient' | 'gaming' | 'spooky' | 'reactions'
+  category: 'uploaded' | 'memes' | 'reactions' | 'gaming' | 'full-songs' | 'ambient'
 }
 
 // Sound effect in library
@@ -769,7 +769,7 @@ export type SoundEffect = {
   id: string
   name: string
   duration: number // in seconds
-  category: 'uploaded' | 'full-songs' | 'ambient' | 'gaming' | 'spooky' | 'reactions'
+  category: 'uploaded' | 'memes' | 'reactions' | 'gaming' | 'full-songs' | 'ambient'
   url: string
   isUserUploaded?: boolean
 }

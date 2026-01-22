@@ -8,10 +8,19 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-// OpenAI client for Whisper
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
+// Lazy-load OpenAI client to avoid build-time errors when API key is missing
+let _openai: OpenAI | null = null
+function getOpenAI(): OpenAI | null {
+  if (!process.env.OPENAI_API_KEY) {
+    return null
+  }
+  if (!_openai) {
+    _openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    })
+  }
+  return _openai
+}
 
 type TranscribeRequest = {
   clipId: string

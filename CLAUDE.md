@@ -5,6 +5,48 @@ Video editing application with clip editing, elements overlay, and export functi
 
 ---
 
+## Subdomain Routing Architecture
+
+Like StreamLadder, ClipFox uses subdomain routing:
+- **Main domain** (clipfox.com) - Marketing/landing pages
+- **App subdomain** (app.clipfox.com) - Authenticated app pages (dashboard, editor, account, etc.)
+
+### How It Works
+1. **middleware.ts** intercepts all requests and checks the subdomain
+2. If on `app.domain.com`, requests are rewritten to `/app/*` routes internally
+3. Auth is checked on the app subdomain - unauthenticated users are redirected to main domain
+
+### Folder Structure
+```
+app/
+├── (marketing)/          # Main domain pages (landing, pricing, etc.)
+│   ├── page.tsx          # Landing page at clipfox.com/
+│   └── pricing/page.tsx  # Pricing at clipfox.com/pricing
+├── app/                  # App subdomain pages (served at app.clipfox.com/)
+│   ├── layout.tsx        # App layout with sidebar
+│   ├── page.tsx          # Dashboard at app.clipfox.com/
+│   ├── account/page.tsx  # Account at app.clipfox.com/account
+│   ├── clips/page.tsx    # Clips at app.clipfox.com/clips
+│   ├── edit/[id]/page.tsx# Editor at app.clipfox.com/edit/[id]
+│   ├── upload/page.tsx   # Upload at app.clipfox.com/upload
+│   └── connections/page.tsx
+└── api/                  # API routes (work on both domains)
+```
+
+### Local Development
+To test subdomain routing locally:
+1. Access `app.localhost:3000` for the app subdomain
+2. Access `localhost:3000` for the main domain
+3. Modern browsers support `*.localhost` subdomains natively
+
+### Environment Variables
+```bash
+APP_SUBDOMAIN=app         # Subdomain for authenticated app
+ROOT_DOMAIN=localhost:3000 # Root domain (for production: clipfox.com)
+```
+
+---
+
 ## TODO - Setup Required (User Action Items)
 
 Before the payment system and new features work, complete these setup steps:
@@ -179,6 +221,148 @@ app/api/
   "yt-dlp-exec": "^2.x"             // TODO - for actual downloads
 }
 ```
+
+---
+
+## TODO - UI/UX Web Interface Guidelines Fixes
+
+**Reviewed against Vercel Web Interface Guidelines (January 2026)**
+
+### Critical Issues (Must Fix)
+
+#### 1. Icon Buttons Missing `aria-label` (~20+ buttons)
+**Files to fix:**
+- `components/editor/Timeline.tsx`
+  - Line 958-977: frameBack, play/pause, frameForward buttons
+  - Line 1025-1059: zoomOut, zoomIn, shortcuts, collapse buttons
+  - Line 1941: Close button in shortcuts modal
+- `components/editor/AudioPanel.tsx`
+  - Line 387-399: Play/pause button
+  - Line 459-465: Add to timeline button
+  - Line 448-456: Delete button
+- `app/pricing/page.tsx`
+  - Line 446-465: Social media link icons (Discord, X, Instagram, TikTok)
+
+**Fix pattern:**
+```tsx
+// Before
+<button onClick={frameBack} className="...">
+  <SkipBack className="w-4 h-4" />
+</button>
+
+// After
+<button onClick={frameBack} className="..." aria-label="Previous frame">
+  <SkipBack className="w-4 h-4" />
+</button>
+```
+
+#### 2. Missing `color-scheme: dark` on HTML Element
+**File:** `app/layout.tsx`
+```tsx
+// Before
+<html lang="en">
+
+// After
+<html lang="en" style={{ colorScheme: 'dark' }}>
+```
+
+#### 3. Missing Theme Color Meta Tag
+**File:** `app/layout.tsx`
+```tsx
+// Add to <head>
+<meta name="theme-color" content="#0a0a12" />
+```
+
+#### 4. Form Inputs Missing `name` and `autocomplete`
+**Files to fix:**
+- `components/ui/input.tsx` - Add sensible defaults
+- `components/editor/AudioPanel.tsx:522-527` - Search input needs `name="search"` and `autocomplete="off"`
+- `components/editor/AudioPanel.tsx:405-416` - Rename input needs `name` and `autocomplete`
+- `components/editor/Timeline.tsx:1011-1019` - Volume input needs label
+- `components/editor/Timeline.tsx:1043-1050` - Zoom input needs label
+
+#### 5. Add `prefers-reduced-motion` Support
+**File:** `app/globals.css`
+```css
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+```
+
+### Medium Priority Issues
+
+#### 6. Images Missing Explicit Dimensions
+**Files to fix:**
+- `components/editor/Timeline.tsx:1774-1778` - Thumbnails need width/height
+- `components/editor/ElementsPanel.tsx` - Multiple image instances
+- `app/dashboard/layout.tsx:177`
+
+#### 7. Destructive Actions Need Confirmation
+**Files to fix:**
+- `components/editor/AudioPanel.tsx:448-456` - Delete sound should confirm
+- `components/editor/Timeline.tsx:1161-1169` - Delete selected should confirm
+
+**Fix pattern:**
+```tsx
+const handleDelete = () => {
+  if (window.confirm('Are you sure you want to delete this?')) {
+    // perform deletion
+  }
+}
+```
+
+#### 8. Touch Improvements
+**File:** `components/editor/Timeline.tsx`
+- Add `touch-action: manipulation` to timeline scrub area
+
+**File:** `components/ui/dialog.tsx`
+- Add `overscroll-behavior: contain` to modal overlay
+
+#### 9. URL State for Filters
+**File:** `app/pricing/page.tsx`
+- Billing interval (`monthly`/`yearly`) should be in URL params
+```tsx
+// Use useSearchParams to persist interval in URL
+const searchParams = useSearchParams()
+const interval = searchParams.get('interval') || 'monthly'
+```
+
+### Implementation Checklist
+
+- [ ] **Phase 1: Accessibility (Critical)**
+  - [ ] Add aria-labels to all icon buttons in Timeline.tsx
+  - [ ] Add aria-labels to all icon buttons in AudioPanel.tsx
+  - [ ] Add aria-labels to social links in pricing page
+  - [ ] Add accessible labels to range inputs (volume, zoom)
+
+- [ ] **Phase 2: Dark Mode & Meta**
+  - [ ] Add `color-scheme: dark` to html element
+  - [ ] Add `<meta name="theme-color">` tag
+  - [ ] Verify dark mode works on all form controls
+
+- [ ] **Phase 3: Forms**
+  - [ ] Add name/autocomplete to Input component
+  - [ ] Fix search input in AudioPanel
+  - [ ] Fix rename input in AudioPanel
+
+- [ ] **Phase 4: Animation & Motion**
+  - [ ] Add prefers-reduced-motion media query to globals.css
+  - [ ] Test all animations respect the preference
+
+- [ ] **Phase 5: Images & Performance**
+  - [ ] Add explicit width/height to Timeline thumbnails
+  - [ ] Audit ElementsPanel images for dimensions
+  - [ ] Add loading="lazy" to below-fold images
+
+- [ ] **Phase 6: UX Improvements**
+  - [ ] Add confirmation dialogs for delete actions
+  - [ ] Add touch-action to timeline
+  - [ ] Add overscroll-behavior to dialogs
+  - [ ] Persist billing interval in URL
 
 ---
 

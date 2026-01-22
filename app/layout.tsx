@@ -26,8 +26,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" style={{ colorScheme: 'dark' }}>
       <head>
+        <meta name="theme-color" content="#0a0a12" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link href={GOOGLE_FONTS_URL} rel="stylesheet" />

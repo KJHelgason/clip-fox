@@ -143,7 +143,7 @@ export async function GET(request: NextRequest) {
     const emotesData = await emotesResponse.json()
 
     // Transform the emotes data for easier consumption
-    const emotes = emotesData.data.map((emote: any) => {
+    const emotes = emotesData.data.map((emote: { id: string; name: string; format: string[]; scale: string[]; theme_mode: string[]; tier?: string; emote_type?: string }) => {
       // Build the URL using the template
       // Template: https://static-cdn.jtvnw.net/emoticons/v2/{{id}}/{{format}}/{{theme_mode}}/{{scale}}
       const format = emote.format.includes('animated') ? 'animated' : 'static'

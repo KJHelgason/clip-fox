@@ -194,12 +194,12 @@ export default function DashboardLayout({
             {showUserMenu && (
               <div className="absolute bottom-full left-0 right-0 mb-2 bg-zinc-800 rounded-lg border border-zinc-700 shadow-xl overflow-hidden">
                 <Link
-                  href="/dashboard/settings"
+                  href="/dashboard/account"
                   className="flex items-center gap-2 px-4 py-2.5 text-sm hover:bg-zinc-700 transition"
                   onClick={() => setShowUserMenu(false)}
                 >
                   <Settings className="w-4 h-4" />
-                  Settings
+                  Account Settings
                 </Link>
                 <button
                   onClick={handleLogout}

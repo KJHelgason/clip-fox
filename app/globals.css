@@ -145,6 +145,7 @@
 /* Custom scrollbar styles */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
@@ -158,6 +159,12 @@
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #6b7280;
+}
+
+/* Firefox horizontal scrollbar */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #4b5563 transparent;
 }
 
 /* Sticker animations */
@@ -398,4 +405,16 @@
   70% { filter: blur(2px); }
   85% { filter: blur(1px); }
   100% { filter: blur(0px); transform: scale(1); }
+}
+
+/* Reduced motion support for accessibility */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -197,7 +197,7 @@ export default function BillingPage() {
 
         {/* Usage Stats */}
         <div className="mt-6 pt-6 border-t border-zinc-800">
-          <h3 className="text-sm font-medium text-zinc-400 mb-4">This Month's Usage</h3>
+          <h3 className="text-sm font-medium text-zinc-400 mb-4">This Month&apos;s Usage</h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-zinc-800/50 rounded-lg p-4">
               <div className="text-sm text-zinc-400">Exports Used</div>
@@ -268,7 +268,7 @@ export default function BillingPage() {
                   <p className="font-medium text-yellow-500">Subscription Canceling</p>
                   <p className="text-sm text-zinc-400 mt-1">
                     Your subscription will end on {formatDate(subscription.current_period_end)}.
-                    You'll be downgraded to the Free plan after that.
+                    You&apos;ll be downgraded to the Free plan after that.
                   </p>
                 </div>
               </div>

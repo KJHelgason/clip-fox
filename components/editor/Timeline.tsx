@@ -866,11 +866,12 @@ export default function Timeline({
   const handleTrimStartClick = () => {
     const targetId = selectedSegmentId || segments.find(s => currentTime >= s.startTime && currentTime < s.endTime)?.id
     if (targetId) {
-      setSegments(prev => prev.map(seg => 
-        seg.id === targetId 
+      const newSegments = segments.map(seg =>
+        seg.id === targetId
           ? { ...seg, trimStart: Math.min(currentTime, seg.trimEnd - 0.1) }
           : seg
-      ))
+      )
+      setSegments(newSegments)
     }
     onTrimStart?.(currentTime)
   }
@@ -878,16 +879,20 @@ export default function Timeline({
   const handleTrimEndClick = () => {
     const targetId = selectedSegmentId || segments.find(s => currentTime >= s.startTime && currentTime < s.endTime)?.id
     if (targetId) {
-      setSegments(prev => prev.map(seg => 
-        seg.id === targetId 
+      const newSegments = segments.map(seg =>
+        seg.id === targetId
           ? { ...seg, trimEnd: Math.max(currentTime, seg.trimStart + 0.1) }
           : seg
-      ))
+      )
+      setSegments(newSegments)
     }
     onTrimEnd?.(currentTime)
   }
 
   const handleDeleteClick = () => {
+    if (!window.confirm('Are you sure you want to delete this item?')) {
+      return
+    }
     if (selectedOverlayId) {
       onDelete?.()
       return
@@ -905,16 +910,17 @@ export default function Timeline({
       return
     }
     if (selectedSegmentId && segments.length > 1) {
-      setSegments(prev => prev.filter(s => s.id !== selectedSegmentId))
+      setSegments(segments.filter(s => s.id !== selectedSegmentId))
       setSelectedSegmentId(null)
     }
   }
 
   const handleSegmentVolumeChange = (newVolume: number) => {
     if (selectedSegmentId) {
-      setSegments(prev => prev.map(seg => 
+      const newSegments = segments.map(seg =>
         seg.id === selectedSegmentId ? { ...seg, volume: newVolume } : seg
-      ))
+      )
+      setSegments(newSegments)
     }
   }
 
@@ -959,12 +965,14 @@ export default function Timeline({
             onClick={frameBack}
             className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"
             title="Previous frame (1/30s)"
+            aria-label="Previous frame"
           >
             <SkipBack className="w-4 h-4" />
           </button>
           <button
             onClick={onPlayPause}
             className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"
+            aria-label={playing ? 'Pause' : 'Play'}
           >
             {playing ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
           </button>
@@ -972,6 +980,7 @@ export default function Timeline({
             onClick={frameForward}
             className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"
             title="Next frame (1/30s)"
+            aria-label="Next frame"
           >
             <SkipForward className="w-4 h-4" />
           </button>
@@ -992,6 +1001,7 @@ export default function Timeline({
               onClick={onToggleMute}
               className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"
               title="Toggle mute"
+              aria-label={muted ? 'Unmute' : 'Mute'}
             >
               <VolumeIcon className="w-4 h-4" />
             </button>
@@ -1016,6 +1026,7 @@ export default function Timeline({
                     value={muted ? 0 : volume}
                     onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                    aria-label="Volume"
                   />
                 </div>
               </div>
@@ -1026,6 +1037,7 @@ export default function Timeline({
             onClick={zoomOut}
             className="w-6 h-6 flex items-center justify-center hover:bg-white/10 rounded-full border border-gray-500 text-gray-400 hover:text-white transition-colors"
             title="Zoom out"
+            aria-label="Zoom out timeline"
           >
             <Minus className="w-3 h-3" />
           </button>
@@ -1048,12 +1060,14 @@ export default function Timeline({
               value={zoomLevel}
               onChange={(e) => setZoomLevel(parseFloat(e.target.value))}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+              aria-label="Timeline zoom level"
             />
           </div>
           <button
             onClick={zoomIn}
             className="w-6 h-6 flex items-center justify-center hover:bg-white/10 rounded-full border border-gray-500 text-gray-400 hover:text-white transition-colors"
             title="Zoom in"
+            aria-label="Zoom in timeline"
           >
             <Plus className="w-3 h-3" />
           </button>
@@ -1062,6 +1076,7 @@ export default function Timeline({
             onClick={() => setShowShortcutsModal(true)}
             className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors ml-1"
             title="Keyboard shortcuts"
+            aria-label="Show keyboard shortcuts"
           >
             <Keyboard className="w-4 h-4" />
           </button>
@@ -1070,6 +1085,7 @@ export default function Timeline({
             onClick={() => setIsCollapsed(true)}
             className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"
             title="Hide timeline"
+            aria-label="Hide timeline"
           >
             <ChevronUp className="w-4 h-4 rotate-180" />
           </button>
@@ -1177,8 +1193,9 @@ export default function Timeline({
           className="relative"
         >
           {/* Time Ruler - ONLY area for playhead dragging */}
-          <div 
+          <div
             className="relative h-6 mb-1 cursor-ew-resize select-none"
+            style={{ touchAction: 'manipulation' }}
             onMouseDown={handleTimeRulerMouseDown}
           >
             {timeMarkers.map((marker) => (
@@ -1771,9 +1788,11 @@ export default function Timeline({
                       className="flex-shrink-0 h-full border-r border-gray-700/20 overflow-hidden"
                       style={{ width: `${100 / thumbnails.length}%` }}
                     >
-                      <img 
-                        src={thumb} 
-                        alt="" 
+                      <img
+                        src={thumb}
+                        alt=""
+                        width={80}
+                        height={64}
                         className="w-full h-full object-cover"
                         draggable={false}
                       />
@@ -1938,6 +1957,7 @@ export default function Timeline({
               <button
                 onClick={() => setShowShortcutsModal(false)}
                 className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                aria-label="Close keyboard shortcuts"
               >
                 <X className="w-5 h-5 text-gray-500" />
               </button>

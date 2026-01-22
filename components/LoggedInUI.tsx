@@ -4,9 +4,26 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 
+type Profile = {
+  id: string
+  email?: string
+  username?: string
+  avatar_url?: string
+  role?: string
+}
+
+type User = {
+  id: string
+  email?: string
+  user_metadata?: {
+    name?: string
+    avatar_url?: string
+  }
+}
+
 export default function LoggedInUI() {
-  const [profile, setProfile] = useState<any>(null);
-  const [user, setUser] = useState<any>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {

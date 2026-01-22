@@ -156,7 +156,7 @@ const animationVariants: Record<string, Variants> = {
     visible: {
       opacity: 1,
       x: 0,
-      transition: { duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }
+      transition: { duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] as const }
     }
   },
   slideLeft: {
@@ -164,7 +164,7 @@ const animationVariants: Record<string, Variants> = {
     visible: {
       opacity: 1,
       x: 0,
-      transition: { duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }
+      transition: { duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] as const }
     }
   },
   slideUp: {
@@ -172,7 +172,7 @@ const animationVariants: Record<string, Variants> = {
     visible: {
       opacity: 1,
       y: 0,
-      transition: { duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }
+      transition: { duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] as const }
     }
   },
   slideDown: {
@@ -180,7 +180,7 @@ const animationVariants: Record<string, Variants> = {
     visible: {
       opacity: 1,
       y: 0,
-      transition: { duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }
+      transition: { duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] as const }
     }
   },
   bounceIn: {
@@ -216,7 +216,7 @@ const animationVariants: Record<string, Variants> = {
       rotate: 0,
       transition: {
         duration: 0.6,
-        ease: [0.25, 0.46, 0.45, 0.94]
+        ease: [0.25, 0.46, 0.45, 0.94] as const
       }
     }
   },
@@ -273,7 +273,7 @@ const animationVariants: Record<string, Variants> = {
       scale: 1,
       transition: {
         duration: 0.4,
-        ease: [0.34, 1.56, 0.64, 1] // Custom spring-like curve
+        ease: [0.34, 1.56, 0.64, 1] as const // Custom spring-like curve
       }
     }
   },
@@ -286,7 +286,7 @@ const animationVariants: Record<string, Variants> = {
       transition: {
         duration: 0.5,
         delay: 0.3, // Start after logo animation
-        ease: [0.25, 0.46, 0.45, 0.94]
+        ease: [0.25, 0.46, 0.45, 0.94] as const
       }
     }
   },
@@ -365,7 +365,7 @@ export const COMPLEX_ANIMATIONS = {
         scale: 1,
         transition: {
           duration: 0.4,
-          ease: [0.34, 1.56, 0.64, 1]
+          ease: [0.34, 1.56, 0.64, 1] as const
         }
       }
     },
@@ -377,7 +377,7 @@ export const COMPLEX_ANIMATIONS = {
         transition: {
           duration: 0.4,
           delay: 0.35,
-          ease: [0.25, 0.46, 0.45, 0.94]
+          ease: [0.25, 0.46, 0.45, 0.94] as const
         }
       }
     },
@@ -437,7 +437,7 @@ export const COMPLEX_ANIMATIONS = {
         rotateY: 0,
         transition: {
           duration: 0.6,
-          ease: [0.25, 0.46, 0.45, 0.94]
+          ease: [0.25, 0.46, 0.45, 0.94] as const
         }
       }
     },
@@ -519,7 +519,7 @@ export const COMPLEX_ANIMATIONS = {
         filter: 'blur(0px)',
         transition: {
           duration: 0.8,
-          ease: [0.25, 0.46, 0.45, 0.94]
+          ease: [0.25, 0.46, 0.45, 0.94] as const
         }
       }
     },
@@ -562,7 +562,7 @@ export const COMPLEX_ANIMATIONS = {
         rotate: 0,
         transition: {
           duration: 0.5,
-          ease: [0.25, 0.46, 0.45, 0.94]
+          ease: [0.25, 0.46, 0.45, 0.94] as const
         }
       }
     },
@@ -574,7 +574,7 @@ export const COMPLEX_ANIMATIONS = {
         transition: {
           duration: 0.5,
           delay: 0.2,
-          ease: [0.25, 0.46, 0.45, 0.94]
+          ease: [0.25, 0.46, 0.45, 0.94] as const
         }
       }
     }
@@ -640,19 +640,19 @@ function BasicSticker({ config, isPreview, animated }: { config: StickerConfig; 
           ...getBgStyle(),
           boxShadow: '0 4px 14px rgba(0,0,0,0.25), 0 2px 4px rgba(0,0,0,0.1)',
         }}
-        variants={complexAnim.container}
+        variants={complexAnim.container as Variants}
         initial="hidden"
         animate="visible"
       >
         <motion.span
           className={`${iconSize} flex-shrink-0`}
-          variants={complexAnim.icon}
+          variants={complexAnim.icon as Variants}
         >
           {platformStyle.icon}
         </motion.span>
         <motion.span
           className={`font-bold ${textSize} whitespace-nowrap overflow-hidden`}
-          variants={complexAnim.text}
+          variants={complexAnim.text as Variants}
         >
           {config.username}
         </motion.span>
@@ -703,14 +703,14 @@ function FollowSticker({ config, isPreview, animated }: { config: StickerConfig;
     return (
       <motion.div
         className="flex items-center gap-0"
-        variants={complexAnim.container}
+        variants={complexAnim.container as Variants}
         initial="hidden"
         animate="visible"
       >
         {/* Icon appears first with bounce */}
         <motion.div
           className={`${iconSize} flex-shrink-0 z-10`}
-          variants={complexAnim.icon}
+          variants={complexAnim.icon as Variants}
           style={{ color: config.style === 'light' ? platformStyle.color : 'white' }}
         >
           {platformStyle.icon}
@@ -724,7 +724,7 @@ function FollowSticker({ config, isPreview, animated }: { config: StickerConfig;
             boxShadow: '0 8px 24px rgba(0,0,0,0.3), 0 2px 8px rgba(0,0,0,0.15)',
             transformOrigin: 'left center',
           }}
-          variants={complexAnim.banner || complexAnim.text}
+          variants={((complexAnim as Record<string, unknown>).banner || complexAnim.text) as Variants}
         >
           {config.showFollowLabel !== false && (
             <div
@@ -738,7 +738,7 @@ function FollowSticker({ config, isPreview, animated }: { config: StickerConfig;
           )}
           <motion.div
             className={`flex items-center gap-2 ${isPreview ? 'px-3 py-1.5' : 'px-4 py-2.5'}`}
-            variants={complexAnim.text}
+            variants={complexAnim.text as Variants}
           >
             <span className={`font-bold ${textSize} whitespace-nowrap`}>{config.username}</span>
           </motion.div>
@@ -1016,7 +1016,7 @@ function CardSticker({ config, isPreview, animated }: { config: StickerConfig; i
           boxShadow: '0 12px 40px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.15)',
           perspective: 1000,
         }}
-        variants={complexAnim.container}
+        variants={complexAnim.container as Variants}
         initial="hidden"
         animate="visible"
       >
@@ -1025,13 +1025,13 @@ function CardSticker({ config, isPreview, animated }: { config: StickerConfig; i
           style={{
             background: config.style === 'light' ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.15)',
           }}
-          variants={complexAnim.icon}
+          variants={complexAnim.icon as Variants}
         >
           {platformStyle.icon}
         </motion.div>
         <motion.span
           className={`font-bold ${textSize} tracking-tight whitespace-nowrap`}
-          variants={complexAnim.text}
+          variants={complexAnim.text as Variants}
         >
           {config.username}
         </motion.span>

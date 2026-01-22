@@ -196,7 +196,7 @@ const ColorPicker = ({
       <div className="flex items-center gap-2">
         <div className="flex items-center gap-1 px-2 py-1.5 bg-white border border-gray-300 rounded text-xs text-gray-600">
           HEX
-          <ChevronDown className="w-3 h-3" />
+          <ChevronDown className="w-3 h-3" aria-hidden="true" />
         </div>
         <input
           type="text"
@@ -731,7 +731,7 @@ type Props = {
 }
 
 // Platform colors and icons
-const PLATFORM_CONFIG: Record<SocialPlatform, { color: string; bgColor: string; icon: JSX.Element }> = {
+const PLATFORM_CONFIG: Record<SocialPlatform, { color: string; bgColor: string; icon: React.ReactNode }> = {
   twitch: { 
     color: '#9146FF', 
     bgColor: 'bg-purple-600',
@@ -1068,7 +1068,7 @@ export default function ElementsPanel({
       }
 
       // Transform Twitch emotes to our format
-      const transformedEmotes: TwitchEmote[] = (data.data || []).map((emote: any) => ({
+      const transformedEmotes: TwitchEmote[] = (data.data || []).map((emote: { id: string; name: string; url_1x: string; url_2x: string; url_4x: string; format?: string[]; isAnimated?: boolean; emote_type?: string; tier?: string }) => ({
         id: emote.id,
         name: emote.name,
         images: {
@@ -1185,7 +1185,7 @@ export default function ElementsPanel({
         console.error('Error uploading file to storage:', {
           message: uploadError.message,
           name: uploadError.name,
-          statusCode: (uploadError as any).statusCode
+          statusCode: (uploadError as Error & { statusCode?: number }).statusCode
         })
         throw uploadError
       }
@@ -1232,7 +1232,7 @@ export default function ElementsPanel({
       const errorDetails = err instanceof Error 
         ? { name: err.name, stack: err.stack } 
         : (typeof err === 'object' && err !== null && 'message' in err)
-          ? { message: (err as any).message, details: (err as any).details }
+          ? { message: (err as { message?: string }).message, details: (err as { details?: string }).details }
           : {}
       console.error('Error uploading file:', {
         message: errorMessage,
@@ -1387,7 +1387,7 @@ export default function ElementsPanel({
       startTime: currentTime,
       endTime: Math.min(duration, currentTime + 3),
       opacity: 100,
-      animation: { in: 'fadeIn', out: 'fadeOut' }
+      animation: { in: 'fade-in', out: 'none' }
     })
 
     setReactionModalOpen(false)
@@ -1414,7 +1414,7 @@ export default function ElementsPanel({
       username: username,
       style: sticker.defaultStyle as StickerStyle,
       animated: sticker.type === 'animated',
-      animation: sticker.animation as any,
+      animation: sticker.animation,
       showFollowLabel: sticker.template === 'follow',
     }
 
@@ -1569,10 +1569,13 @@ export default function ElementsPanel({
                 className="aspect-square bg-[#1a1a2e] hover:bg-[#252538] border border-gray-700 rounded-lg overflow-hidden transition-colors group relative"
                 title={element.name}
               >
-                <img 
-                  src={element.file_url} 
+                <img
+                  src={element.file_url}
                   alt={element.name}
+                  width={100}
+                  height={100}
                   className="w-full h-full object-cover"
+                  loading="lazy"
                 />
               </button>
             ))}
@@ -1684,7 +1687,7 @@ export default function ElementsPanel({
             className="relative p-3 bg-gradient-to-br from-cyan-100/80 to-pink-50/80 hover:from-cyan-200/80 hover:to-pink-100/80 border border-gray-200 rounded-lg transition-colors overflow-hidden"
           >
             <div className="flex flex-col gap-0.5 bg-white rounded-lg px-3 py-2 text-xs shadow-md border border-gray-100">
-              <span className="text-gray-400 text-[10px]">Reply to Username's comment</span>
+              <span className="text-gray-400 text-[10px]">Reply to Username&apos;s comment</span>
               <span className="text-gray-900 font-medium">TikTok reaction</span>
             </div>
           </button>
@@ -1734,6 +1737,8 @@ export default function ElementsPanel({
                 <img
                   src={sticker.images.fixed_height.url}
                   alt={sticker.title}
+                  width={100}
+                  height={100}
                   className="w-full h-full object-contain"
                   loading="lazy"
                 />
@@ -1772,6 +1777,8 @@ export default function ElementsPanel({
                 <img
                   src={gif.images.fixed_height.url}
                   alt={gif.title}
+                  width={100}
+                  height={100}
                   className="w-full h-full object-cover"
                   loading="lazy"
                 />
@@ -1799,6 +1806,8 @@ export default function ElementsPanel({
         <div className="flex gap-2 mb-3">
           <input
             type="text"
+            name="twitch-username"
+            autoComplete="off"
             placeholder={socialUsernames.twitch || 'Enter Twitch username'}
             value={twitchEmoteSearch}
             onChange={(e) => setTwitchEmoteSearch(e.target.value)}
@@ -1837,6 +1846,8 @@ export default function ElementsPanel({
                 <img
                   src={emote.images.url_2x}
                   alt={emote.name}
+                  width={64}
+                  height={64}
                   className="w-full h-full object-contain"
                   loading="lazy"
                 />
@@ -1893,10 +1904,13 @@ export default function ElementsPanel({
                   onClick={() => addCustomElement(element)}
                   className="w-full h-full"
                 >
-                  <img 
-                    src={element.file_url} 
+                  <img
+                    src={element.file_url}
                     alt={element.name}
+                    width={150}
+                    height={150}
                     className="w-full h-full object-cover"
+                    loading="lazy"
                   />
                 </button>
                 <button
@@ -1935,16 +1949,16 @@ export default function ElementsPanel({
             Let your viewers know where to find you on social media with these stickers.
           </p>
           
-          {/* Filter tabs */}
-          <div className="flex flex-wrap gap-2 mb-4">
+          {/* Filter tabs - Horizontal scroll, single line */}
+          <div className="flex gap-1.5 overflow-x-auto custom-scrollbar pb-2 mb-3">
             {filters.map(filter => (
               <button
                 key={filter}
                 onClick={() => setSocialFilter(filter)}
-                className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors shrink-0 ${
                   socialFilter === filter
                     ? 'bg-purple-600 text-white'
-                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-300'
                 }`}
               >
                 {filter.charAt(0).toUpperCase() + filter.slice(1)}
@@ -1956,6 +1970,8 @@ export default function ElementsPanel({
           <div className="mb-2">
             <input
               type="text"
+              name="social-username"
+              autoComplete="off"
               placeholder="Your username"
               value={localUsername}
               onChange={(e) => handleUsernameChange(e.target.value)}
@@ -2107,6 +2123,8 @@ export default function ElementsPanel({
               if (onUpdateElement) {
                 onUpdateElement(selectedElement.id, {
                   animation: {
+                    in: selectedElement.animation?.in || 'none',
+                    out: selectedElement.animation?.out || 'none',
                     ...selectedElement.animation,
                     [editAnimationTab]: anim
                   }
@@ -2263,14 +2281,16 @@ export default function ElementsPanel({
               
               <AnimationGrid
                 animations={ELEMENT_ANIMATIONS}
-                selected={editAnimationTab === 'in' 
-                  ? selectedElement.animation?.in || 'none' 
+                selected={editAnimationTab === 'in'
+                  ? selectedElement.animation?.in || 'none'
                   : selectedElement.animation?.out || 'none'
                 }
                 onSelect={(anim) => {
                   if (onUpdateElement) {
                     onUpdateElement(selectedElement.id, {
                       animation: {
+                        in: selectedElement.animation?.in || 'none',
+                        out: selectedElement.animation?.out || 'none',
                         ...selectedElement.animation,
                         [editAnimationTab]: anim
                       }
@@ -2284,6 +2304,8 @@ export default function ElementsPanel({
       </div>
     )
   }
+
+  // Edit Custom Element View
 
   // Edit Text View
   const renderEditTextView = () => {
@@ -3228,14 +3250,16 @@ export default function ElementsPanel({
               
               <AnimationGrid
                 animations={TEXT_ANIMATIONS}
-                selected={editAnimationTab === 'in' 
-                  ? selectedElement.animation?.in || 'none' 
+                selected={editAnimationTab === 'in'
+                  ? selectedElement.animation?.in || 'none'
                   : selectedElement.animation?.out || 'none'
                 }
                 onSelect={(anim) => {
                   if (onUpdateElement) {
                     onUpdateElement(selectedElement.id, {
                       animation: {
+                        in: selectedElement.animation?.in || 'none',
+                        out: selectedElement.animation?.out || 'none',
                         ...selectedElement.animation,
                         [editAnimationTab]: anim
                       }
@@ -3319,7 +3343,7 @@ export default function ElementsPanel({
       return (
         <div className={`flex flex-col gap-1 px-4 py-3 rounded-xl text-sm ${reactionDarkMode ? 'bg-[#121212] text-white' : 'bg-white text-gray-900 border border-gray-200'}`}
           style={{ boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
-          <span className={`text-xs ${reactionDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>Reply to {username}'s comment</span>
+          <span className={`text-xs ${reactionDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>Reply to {username}&apos;s comment</span>
           <span className="font-medium">{message}</span>
         </div>
       )
@@ -3364,6 +3388,8 @@ export default function ElementsPanel({
         <div className="flex gap-2">
           <input
             type="text"
+            name="sticker-search"
+            autoComplete="off"
             placeholder="Search stickers..."
             value={animatedStickersSearch}
             onChange={(e) => setAnimatedStickersSearch(e.target.value)}
@@ -3396,6 +3422,8 @@ export default function ElementsPanel({
                 <img
                   src={sticker.images.fixed_height.url}
                   alt={sticker.title}
+                  width={100}
+                  height={100}
                   className="w-full h-full object-contain"
                   loading="lazy"
                 />
@@ -3428,6 +3456,8 @@ export default function ElementsPanel({
         <div className="flex gap-2">
           <input
             type="text"
+            name="gif-search"
+            autoComplete="off"
             placeholder="Search GIFs..."
             value={gifsSearch}
             onChange={(e) => setGifsSearch(e.target.value)}
@@ -3460,6 +3490,8 @@ export default function ElementsPanel({
                 <img
                   src={gif.images.fixed_height.url}
                   alt={gif.title}
+                  width={100}
+                  height={100}
                   className="w-full h-full object-cover"
                   loading="lazy"
                 />
@@ -3492,6 +3524,8 @@ export default function ElementsPanel({
         <div className="flex gap-2">
           <input
             type="text"
+            name="twitch-emote-search"
+            autoComplete="off"
             placeholder="Enter Twitch username..."
             value={twitchEmoteSearch}
             onChange={(e) => setTwitchEmoteSearch(e.target.value)}
@@ -3529,6 +3563,8 @@ export default function ElementsPanel({
                 <img
                   src={emote.images.url_2x}
                   alt={emote.name}
+                  width={64}
+                  height={64}
                   className="w-full h-full object-contain"
                   loading="lazy"
                 />
@@ -3635,6 +3671,8 @@ export default function ElementsPanel({
                       <label className="block text-sm font-medium text-gray-700 mb-2">Username</label>
                       <input
                         type="text"
+                        name="reaction-username"
+                        autoComplete="off"
                         value={reactionUsername}
                         onChange={(e) => setReactionUsername(e.target.value)}
                         placeholder="Enter username"
@@ -3663,7 +3701,7 @@ export default function ElementsPanel({
                       {PLATFORM_CONFIG[reactionPlatform].icon}
                     </div>
                     <p className="text-gray-500">Search {platformName} chat coming soon...</p>
-                    <p className="text-sm text-gray-400 mt-2">Use "Create your own" to make a custom reaction</p>
+                    <p className="text-sm text-gray-400 mt-2">Use &quot;Create your own&quot; to make a custom reaction</p>
                   </div>
                 )}
               </div>

@@ -3,8 +3,16 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
+type UserProfile = {
+  id: string
+  email: string
+  username: string
+  role: string
+  created_at: string
+}
+
 export default function UserManagementPage() {
-  const [users, setUsers] = useState<any[]>([]);
+  const [users, setUsers] = useState<UserProfile[]>([]);
   const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
 
   useEffect(() => {

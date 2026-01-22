@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { OverlayElement, OverlayAnimation } from '@/lib/types'
+import { OverlayElement, AnimationType } from '@/lib/types'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 
@@ -25,18 +25,16 @@ const FONT_FAMILIES = [
   { value: 'Comic Sans MS, cursive', label: 'Comic Sans' },
 ]
 
-const ANIMATIONS: { value: OverlayAnimation['type']; label: string; icon: string }[] = [
+const ANIMATIONS: { value: AnimationType; label: string; icon: string }[] = [
   { value: 'none', label: 'None', icon: '⊘' },
   { value: 'fade-in', label: 'Fade In', icon: '🌅' },
-  { value: 'fade-out', label: 'Fade Out', icon: '🌆' },
-  { value: 'slide-up', label: 'Slide Up', icon: '⬆️' },
-  { value: 'slide-down', label: 'Slide Down', icon: '⬇️' },
+  { value: 'slide-top', label: 'Slide Up', icon: '⬆️' },
+  { value: 'slide-bottom', label: 'Slide Down', icon: '⬇️' },
   { value: 'slide-left', label: 'Slide Left', icon: '⬅️' },
   { value: 'slide-right', label: 'Slide Right', icon: '➡️' },
   { value: 'bounce', label: 'Bounce', icon: '🏀' },
-  { value: 'zoom-in', label: 'Zoom In', icon: '🔍' },
-  { value: 'zoom-out', label: 'Zoom Out', icon: '🔎' },
-  { value: 'typewriter', label: 'Typewriter', icon: '⌨️' },
+  { value: 'pop', label: 'Pop', icon: '💥' },
+  { value: 'reveal', label: 'Reveal', icon: '✨' },
 ]
 
 const PRESET_COLORS = [
@@ -428,11 +426,14 @@ export default function OverlayProperties({ overlay, onUpdate, onDelete, onDupli
                 {ANIMATIONS.map((anim) => (
                   <button
                     key={anim.value}
-                    onClick={() => onUpdate(overlay.id, { 
-                      animation: { ...overlay.animation, type: anim.value } as OverlayAnimation 
+                    onClick={() => onUpdate(overlay.id, {
+                      animation: {
+                        in: anim.value,
+                        out: overlay.animation?.out || 'none'
+                      }
                     })}
                     className={`py-2 rounded text-xs transition-colors ${
-                      overlay.animation?.type === anim.value
+                      overlay.animation?.in === anim.value
                         ? 'bg-purple-600 text-white'
                         : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
                     }`}
@@ -444,22 +445,27 @@ export default function OverlayProperties({ overlay, onUpdate, onDelete, onDupli
               </div>
             </PropertySection>
 
-            {overlay.animation?.type && overlay.animation.type !== 'none' && (
+            {overlay.animation?.in && overlay.animation.in !== 'none' && (
               <PropertySection title="Animation Settings">
                 <div className="space-y-2">
                   <div>
                     <label className="text-[10px] text-gray-500 mb-1 flex justify-between">
-                      <span>Duration</span>
-                      <span>{overlay.animation.duration ?? 0.3}s</span>
+                      <span>In Duration</span>
+                      <span>{overlay.animation.inDuration ?? 0.3}s</span>
                     </label>
                     <input
                       type="range"
                       min={0.1}
                       max={2}
                       step={0.1}
-                      value={overlay.animation.duration ?? 0.3}
-                      onChange={(e) => onUpdate(overlay.id, { 
-                        animation: { ...overlay.animation, duration: parseFloat(e.target.value) } as OverlayAnimation 
+                      value={overlay.animation.inDuration ?? 0.3}
+                      onChange={(e) => onUpdate(overlay.id, {
+                        animation: {
+                          in: overlay.animation?.in || 'none',
+                          out: overlay.animation?.out || 'none',
+                          ...overlay.animation,
+                          inDuration: parseFloat(e.target.value)
+                        }
                       })}
                       className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
                     />
@@ -468,8 +474,13 @@ export default function OverlayProperties({ overlay, onUpdate, onDelete, onDupli
                     <label className="text-[10px] text-gray-500 mb-1 block">Easing</label>
                     <select
                       value={overlay.animation.easing ?? 'ease-out'}
-                      onChange={(e) => onUpdate(overlay.id, { 
-                        animation: { ...overlay.animation, easing: e.target.value as OverlayAnimation['easing'] } as OverlayAnimation 
+                      onChange={(e) => onUpdate(overlay.id, {
+                        animation: {
+                          in: overlay.animation?.in || 'none',
+                          out: overlay.animation?.out || 'none',
+                          ...overlay.animation,
+                          easing: e.target.value as 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out'
+                        }
                       })}
                       className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-white"
                     >

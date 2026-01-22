@@ -4,8 +4,9 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Upload, Play, Pause, Search, Trash2, Plus, Volume2, X, Check, Loader2 } from 'lucide-react'
 import { AudioTrack, SoundEffect } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
+import { useSounds } from '@/lib/hooks/useSounds'
 
-type AudioCategory = 'uploaded' | 'full-songs' | 'ambient' | 'gaming' | 'spooky' | 'reactions'
+type AudioCategory = 'uploaded' | 'memes' | 'reactions' | 'gaming' | 'full-songs' | 'ambient'
 
 type Props = {
   onAddAudioTrack: (track: AudioTrack) => void
@@ -14,16 +15,19 @@ type Props = {
   selectedAudioTrack?: AudioTrack | null
   onUpdateAudioTrack?: (track: AudioTrack) => void
   onOpenTrimModal?: (track: AudioTrack) => void
+  userId?: string | null
 }
 
 const CATEGORY_INFO: Record<AudioCategory, { title: string; gradient: string }> = {
   'uploaded': { title: 'Uploaded', gradient: 'from-purple-500 to-pink-500' },
+  'memes': { title: 'Memes & Humor', gradient: 'from-pink-500 to-rose-500' },
+  'reactions': { title: 'Reaction Sounds', gradient: 'from-yellow-500 to-orange-500' },
+  'gaming': { title: 'Gaming', gradient: 'from-orange-500 to-red-500' },
   'full-songs': { title: 'Full Songs', gradient: 'from-blue-500 to-cyan-500' },
   'ambient': { title: 'Ambient Sounds', gradient: 'from-green-500 to-teal-500' },
-  'gaming': { title: 'Gaming', gradient: 'from-orange-500 to-red-500' },
-  'spooky': { title: 'Spooky', gradient: 'from-purple-600 to-violet-800' },
-  'reactions': { title: 'Reaction Sounds', gradient: 'from-yellow-500 to-orange-500' },
 }
+
+const ALL_CATEGORIES: AudioCategory[] = ['uploaded', 'memes', 'reactions', 'gaming', 'full-songs', 'ambient']
 
 const MAX_UPLOADED_SOUNDS = 10
 
@@ -33,6 +37,37 @@ function formatDuration(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
+// Skeleton loader for sound items
+function SoundItemSkeleton() {
+  return (
+    <div className="flex items-center gap-2 p-2 bg-[#1a1a2e] rounded-lg animate-pulse">
+      <div className="w-8 h-8 rounded-full bg-gray-700" />
+      <div className="flex-1 min-w-0">
+        <div className="h-4 bg-gray-700 rounded w-3/4 mb-1" />
+        <div className="h-3 bg-gray-800 rounded w-1/2" />
+      </div>
+      <div className="h-3 bg-gray-700 rounded w-8" />
+    </div>
+  )
+}
+
+// Skeleton loader for category section
+function CategorySkeleton() {
+  return (
+    <div className="mb-6">
+      <div className="flex items-center gap-2 mb-3">
+        <div className="w-1 h-4 rounded-full bg-gray-700" />
+        <div className="h-3 bg-gray-700 rounded w-24" />
+      </div>
+      <div className="space-y-1">
+        <SoundItemSkeleton />
+        <SoundItemSkeleton />
+        <SoundItemSkeleton />
+      </div>
+    </div>
+  )
+}
+
 export default function AudioPanel({
   onAddAudioTrack,
   currentTime,
@@ -40,111 +75,22 @@ export default function AudioPanel({
   selectedAudioTrack,
   onUpdateAudioTrack,
   onOpenTrimModal,
+  userId,
 }: Props) {
+  // Use SWR-cached sounds hook
+  const { defaultSounds, uploadedSounds, isLoading, mutateUploaded } = useSounds(userId || null)
+
   const [searchQuery, setSearchQuery] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState<AudioCategory | 'all'>('all')
   const [playingId, setPlayingId] = useState<string | null>(null)
-  const [uploadedSounds, setUploadedSounds] = useState<SoundEffect[]>([])
-  const [defaultSounds, setDefaultSounds] = useState<Record<AudioCategory, SoundEffect[]>>({
-    'uploaded': [],
-    'full-songs': [],
-    'ambient': [],
-    'gaming': [],
-    'spooky': [],
-    'reactions': [],
-  })
   const [editingNameId, setEditingNameId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
   const [hoveredSoundId, setHoveredSoundId] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
   const [isUploading, setIsUploading] = useState(false)
-  const [userId, setUserId] = useState<string | null>(null)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
-
-  // Fetch user ID on mount
-  useEffect(() => {
-    const getUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      setUserId(user?.id || null)
-    }
-    getUser()
-  }, [])
-
-  // Fetch sounds from Supabase
-  useEffect(() => {
-    const fetchSounds = async () => {
-      setIsLoading(true)
-      try {
-        // Fetch default sounds (available to all users)
-        const { data: defaultData, error: defaultError } = await supabase
-          .from('sounds')
-          .select('*')
-          .eq('is_default', true)
-          .order('name')
-
-        if (defaultError) {
-          console.error('Error fetching default sounds:', defaultError)
-        } else if (defaultData) {
-          // Organize by category
-          const organized: Record<AudioCategory, SoundEffect[]> = {
-            'uploaded': [],
-            'full-songs': [],
-            'ambient': [],
-            'gaming': [],
-            'spooky': [],
-            'reactions': [],
-          }
-          defaultData.forEach((sound) => {
-            const category = sound.category as AudioCategory
-            if (organized[category]) {
-              organized[category].push({
-                id: sound.id,
-                name: sound.name,
-                duration: sound.duration,
-                category: category,
-                url: sound.file_url || '',
-                isUserUploaded: false,
-              })
-            }
-          })
-          setDefaultSounds(organized)
-        }
-
-        // Fetch user's uploaded sounds
-        if (userId) {
-          const { data: userData, error: userError } = await supabase
-            .from('sounds')
-            .select('*')
-            .eq('user_id', userId)
-            .eq('is_default', false)
-            .order('created_at', { ascending: false })
-
-          if (userError) {
-            console.error('Error fetching user sounds:', userError)
-          } else if (userData) {
-            setUploadedSounds(
-              userData.map((sound) => ({
-                id: sound.id,
-                name: sound.name,
-                duration: sound.duration,
-                category: 'uploaded' as AudioCategory,
-                url: sound.file_url || '',
-                isUserUploaded: true,
-              }))
-            )
-          }
-        }
-      } catch (err) {
-        console.error('Error loading sounds:', err)
-      } finally {
-        setIsLoading(false)
-      }
-    }
-
-    fetchSounds()
-  }, [userId])
 
   // Focus input when editing name
   useEffect(() => {
@@ -171,7 +117,7 @@ export default function AudioPanel({
 
   const handleAddToTimeline = useCallback((sound: SoundEffect) => {
     const newTrack: AudioTrack = {
-      id: `audio-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      id: `audio-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
       soundId: sound.id,
       name: sound.name,
       url: sound.url,
@@ -198,6 +144,8 @@ export default function AudioPanel({
 
     setIsUploading(true)
 
+    const newSounds: SoundEffect[] = []
+
     for (const file of Array.from(files)) {
       try {
         // Get actual audio duration first
@@ -222,7 +170,7 @@ export default function AudioPanel({
 
         // Generate unique file name
         const fileExt = file.name.split('.').pop()
-        const fileName = `${userId}/${Date.now()}-${Math.random().toString(36).substr(2, 9)}.${fileExt}`
+        const fileName = `${userId}/${Date.now()}-${Math.random().toString(36).substring(2, 11)}.${fileExt}`
 
         // Upload to Supabase Storage
         const { data: uploadData, error: uploadError } = await supabase.storage
@@ -266,22 +214,23 @@ export default function AudioPanel({
           continue
         }
 
-        // Add to local state
-        const newSound: SoundEffect = {
+        // Collect new sound for batch update
+        newSounds.push({
           id: soundData.id,
           name: soundName,
           duration: audioDuration,
           category: 'uploaded',
           url: publicUrl,
           isUserUploaded: true,
-        }
-        setUploadedSounds(prev => {
-          if (prev.length >= MAX_UPLOADED_SOUNDS) return prev
-          return [newSound, ...prev]
         })
       } catch (err) {
         console.error('Error processing file:', err)
       }
+    }
+
+    // Update SWR cache with new sounds (optimistic update)
+    if (newSounds.length > 0) {
+      mutateUploaded((current) => [...newSounds, ...(current || [])], false)
     }
 
     setIsUploading(false)
@@ -290,7 +239,7 @@ export default function AudioPanel({
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
-  }, [uploadedSounds.length, userId])
+  }, [uploadedSounds.length, userId, mutateUploaded])
 
   const handleDeleteUploaded = useCallback(async (id: string) => {
     try {
@@ -322,12 +271,12 @@ export default function AudioPanel({
         await supabase.storage.from('audio').remove([soundData.file_path])
       }
 
-      // Update local state
-      setUploadedSounds(prev => prev.filter(s => s.id !== id))
+      // Update SWR cache (optimistic update)
+      mutateUploaded((current) => current?.filter(s => s.id !== id) || [], false)
     } catch (err) {
       console.error('Error deleting sound:', err)
     }
-  }, [])
+  }, [mutateUploaded])
 
   const handleStartRename = useCallback((sound: SoundEffect) => {
     setEditingNameId(sound.id)
@@ -345,15 +294,18 @@ export default function AudioPanel({
       if (error) {
         console.error('Error renaming sound:', error)
       } else {
-        // Update local state
-        setUploadedSounds(prev =>
-          prev.map(s => s.id === editingNameId ? { ...s, name: editingName.trim() } : s)
+        // Update SWR cache
+        mutateUploaded(
+          (current) => current?.map(s =>
+            s.id === editingNameId ? { ...s, name: editingName.trim() } : s
+          ) || [],
+          false
         )
       }
     }
     setEditingNameId(null)
     setEditingName('')
-  }, [editingNameId, editingName])
+  }, [editingNameId, editingName, mutateUploaded])
 
   const handleCancelRename = useCallback(() => {
     setEditingNameId(null)
@@ -387,6 +339,7 @@ export default function AudioPanel({
           style={{
             boxShadow: isPlaying ? `0 0 12px rgba(139, 92, 246, 0.5)` : undefined,
           }}
+          aria-label={isPlaying ? `Pause ${sound.name}` : `Play ${sound.name}`}
         >
           {isPlaying ? (
             <Pause className="w-4 h-4 text-white" />
@@ -402,6 +355,8 @@ export default function AudioPanel({
               <input
                 ref={nameInputRef}
                 type="text"
+                name="sound-name"
+                autoComplete="off"
                 value={editingName}
                 onChange={(e) => setEditingName(e.target.value)}
                 onKeyDown={(e) => {
@@ -410,6 +365,7 @@ export default function AudioPanel({
                 }}
                 onBlur={handleSaveRename}
                 className="flex-1 bg-gray-800 text-white text-sm px-2 py-0.5 rounded border border-purple-500 outline-none"
+                aria-label="Sound name"
               />
               <button
                 onClick={handleSaveRename}
@@ -444,9 +400,14 @@ export default function AudioPanel({
         {/* Delete button for uploaded sounds (on hover) */}
         {showDelete && isHovered && !isEditing && (
           <button
-            onClick={() => handleDeleteUploaded(sound.id)}
+            onClick={() => {
+              if (window.confirm(`Are you sure you want to delete "${sound.name}"?`)) {
+                handleDeleteUploaded(sound.id)
+              }
+            }}
             className="w-7 h-7 rounded bg-red-600/20 hover:bg-red-600/40 flex items-center justify-center shrink-0 transition-colors"
             title="Delete sound"
+            aria-label={`Delete ${sound.name}`}
           >
             <Trash2 className="w-4 h-4 text-red-400" />
           </button>
@@ -457,6 +418,7 @@ export default function AudioPanel({
           onClick={() => handleAddToTimeline(sound)}
           className="w-7 h-7 rounded bg-purple-600 hover:bg-purple-700 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
           title="Add to timeline"
+          aria-label={`Add ${sound.name} to timeline`}
         >
           <Plus className="w-4 h-4 text-white" />
         </button>
@@ -499,24 +461,59 @@ export default function AudioPanel({
     )
   }
 
+  // Check if a category should be shown based on filter
+  const shouldShowCategory = (category: AudioCategory) => {
+    return selectedCategory === 'all' || selectedCategory === category
+  }
+
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="p-3 border-b border-gray-800">
-        <h3 className="text-sm font-medium text-white mb-1">Sound Effects</h3>
-        <p className="text-xs text-gray-500">Add sound effects and music to enhance your video.</p>
+      {/* Category Filter Pills - Horizontal scroll, single line */}
+      <div className="px-3 pt-3 pb-2">
+        <div className="flex gap-1.5 overflow-x-auto custom-scrollbar pb-1">
+          <button
+            onClick={() => setSelectedCategory('all')}
+            className={`px-2.5 py-1 text-xs font-medium rounded-full transition-colors shrink-0 ${
+              selectedCategory === 'all'
+                ? 'bg-purple-600 text-white'
+                : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-300'
+            }`}
+          >
+            All
+          </button>
+          {ALL_CATEGORIES.map((category) => {
+            const { title, gradient } = CATEGORY_INFO[category]
+            const isSelected = selectedCategory === category
+            return (
+              <button
+                key={category}
+                onClick={() => setSelectedCategory(category)}
+                className={`px-2.5 py-1 text-xs font-medium rounded-full transition-colors shrink-0 ${
+                  isSelected
+                    ? `bg-gradient-to-r ${gradient} text-white`
+                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-300'
+                }`}
+              >
+                {title}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       {/* Search */}
-      <div className="p-3">
+      <div className="px-3 pb-3 border-b border-gray-800">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
           <input
             type="text"
+            name="search"
+            autoComplete="off"
             placeholder="Search sounds..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-purple-500"
+            aria-label="Search sounds"
           />
           {searchQuery && (
             <button
@@ -529,56 +526,57 @@ export default function AudioPanel({
         </div>
       </div>
 
-      {/* Upload Area */}
-      <div className="px-3 pb-3">
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="audio/*,.mp3,.mp4,.wav,.aac,.ogg,.m4a"
-          multiple
-          onChange={handleFileUpload}
-          className="hidden"
-        />
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploadedSounds.length >= MAX_UPLOADED_SOUNDS || isUploading || !userId}
-          className="w-full border-2 border-dashed border-gray-700 rounded-lg p-4 text-center hover:border-purple-500/50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {isUploading ? (
-            <>
-              <Loader2 className="w-5 h-5 mx-auto mb-2 text-purple-400 animate-spin" />
-              <p className="text-sm text-purple-400">Uploading...</p>
-            </>
-          ) : (
-            <>
-              <Upload className="w-5 h-5 mx-auto mb-2 text-gray-400" />
-              <p className="text-sm text-gray-400">Upload a sound</p>
-              <p className="text-xs text-gray-600">Max 10 MB | .mp3, .wav, .aac, .ogg</p>
-            </>
-          )}
-        </button>
-      </div>
+      {/* Sound Library - Scrollable (includes upload section) */}
+      <div className="flex-1 overflow-y-auto px-3 pb-3 custom-scrollbar">
+        {/* Upload Area - Now scrolls with content */}
+        <div className="mb-4">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="audio/*,.mp3,.mp4,.wav,.aac,.ogg,.m4a"
+            multiple
+            onChange={handleFileUpload}
+            className="hidden"
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadedSounds.length >= MAX_UPLOADED_SOUNDS || isUploading || !userId}
+            className="w-full border-2 border-dashed border-gray-700 rounded-lg p-4 text-center hover:border-purple-500/50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isUploading ? (
+              <>
+                <Loader2 className="w-5 h-5 mx-auto mb-2 text-purple-400 animate-spin" />
+                <p className="text-sm text-purple-400">Uploading...</p>
+              </>
+            ) : (
+              <>
+                <Upload className="w-5 h-5 mx-auto mb-2 text-gray-400" />
+                <p className="text-sm text-gray-400">Upload a sound</p>
+                <p className="text-xs text-gray-600">Max 10 MB | .mp3, .wav, .aac, .ogg</p>
+              </>
+            )}
+          </button>
+        </div>
 
-      {/* Sound Library - Scrollable */}
-      <div className="flex-1 overflow-y-auto px-3 pb-3">
         {isLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="w-6 h-6 text-purple-400 animate-spin" />
-            <span className="ml-2 text-sm text-gray-400">Loading sounds...</span>
+          <div className="pt-2">
+            <CategorySkeleton />
+            <CategorySkeleton />
+            <CategorySkeleton />
           </div>
         ) : (
           <>
             {/* Uploaded section first */}
-            {(uploadedSounds.length > 0 || !searchQuery) &&
+            {shouldShowCategory('uploaded') && (uploadedSounds.length > 0 || !searchQuery) &&
               renderCategorySection('uploaded', uploadedSounds)
             }
 
             {/* Other categories from Supabase */}
-            {renderCategorySection('full-songs', defaultSounds['full-songs'])}
-            {renderCategorySection('ambient', defaultSounds['ambient'])}
-            {renderCategorySection('gaming', defaultSounds['gaming'])}
-            {renderCategorySection('spooky', defaultSounds['spooky'])}
-            {renderCategorySection('reactions', defaultSounds['reactions'])}
+            {shouldShowCategory('memes') && renderCategorySection('memes', defaultSounds['memes'])}
+            {shouldShowCategory('reactions') && renderCategorySection('reactions', defaultSounds['reactions'])}
+            {shouldShowCategory('gaming') && renderCategorySection('gaming', defaultSounds['gaming'])}
+            {shouldShowCategory('full-songs') && renderCategorySection('full-songs', defaultSounds['full-songs'])}
+            {shouldShowCategory('ambient') && renderCategorySection('ambient', defaultSounds['ambient'])}
 
             {/* Show message if no default sounds available */}
             {Object.values(defaultSounds).every(arr => arr.length === 0) && uploadedSounds.length === 0 && !searchQuery && (

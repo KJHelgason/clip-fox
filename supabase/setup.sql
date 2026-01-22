@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   email TEXT,
   username TEXT,
   avatar_url TEXT,
+  twitch_name TEXT, -- Twitch username for clip suggestions
   role TEXT DEFAULT 'user' CHECK (role IN ('user', 'admin')),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -157,6 +158,7 @@ CREATE TABLE IF NOT EXISTS templates (
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
+  preview_text TEXT, -- For displaying a preview of the template settings
   -- Template data
   aspect_ratio TEXT NOT NULL DEFAULT '9:16',
   layout_data JSONB,
@@ -427,7 +429,7 @@ CREATE TABLE IF NOT EXISTS sounds (
   file_path TEXT NOT NULL,
   file_url TEXT,
   duration REAL NOT NULL DEFAULT 0,
-  category TEXT NOT NULL CHECK (category IN ('full-songs', 'ambient', 'gaming', 'spooky', 'reactions', 'uploaded')),
+  category TEXT NOT NULL CHECK (category IN ('full-songs', 'ambient', 'gaming', 'reactions', 'memes', 'uploaded')),
   is_default BOOLEAN DEFAULT FALSE, -- TRUE for admin-uploaded default sounds
   file_size BIGINT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -755,7 +757,7 @@ CREATE INDEX IF NOT EXISTS idx_clipgpt_moments_virality ON clipgpt_moments(viral
 CREATE TABLE IF NOT EXISTS social_connections (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  platform TEXT NOT NULL CHECK (platform IN ('tiktok', 'youtube', 'instagram', 'twitter', 'facebook')),
+  platform TEXT NOT NULL CHECK (platform IN ('tiktok', 'youtube', 'instagram', 'twitter', 'facebook', 'twitch', 'kick')),
   platform_user_id TEXT,
   platform_username TEXT,
   platform_display_name TEXT,
